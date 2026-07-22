@@ -481,10 +481,13 @@ function analyze(img){
   else { contrast = c_iris; cbasis = "iris_lowconf"; }   // 염색모+동공불량: 임시 측정 + 재촬영 요청
 
   // ---------- [비율] 3분할·부위 비율 ----------
-  const faceH = dist(P(lm,10,W,H), P(lm,152,W,H));
+  // 상안부 꼭대기 = 검출된 헤어라인 (10번은 이마 중간 — 대표 지적 2026-07-22, engine v2.1)
+  const hairTop = detectHairline(ctx, lm, W, H, faceW, skin);
+  const topPt = {x:P(lm,10,W,H).x, y:hairTop.y};
+  const faceH = dist(topPt, P(lm,152,W,H));
   const browY = (P(lm,105,W,H).y + P(lm,334,W,H).y)/2;
   const subnasale = P(lm,2,W,H);
-  const upper = (browY - P(lm,10,W,H).y);
+  const upper = (browY - hairTop.y);
   const midf  = (subnasale.y - browY);
   const lower = (P(lm,152,W,H).y - subnasale.y);
   const triSum = upper+midf+lower;
@@ -543,7 +546,7 @@ function analyze(img){
   // 드레이핑에 쓸 얼굴 크롭 — 개발 오버레이를 그리기 전에 떠 둡니다(점이 찍히면 색 비교가 흐려져요)
   const faceCrop = cropFace(cv, lm, W, H, faceW);
   // 셀카 측정 오버레이(VLAS #2) — 위와 같은 이유로 dev 랜드마크 점이 찍히기 전에 뜹니다. STATE 메모리 전용, out(JSON)에는 넣지 않습니다.
-  const overlayImg = overlayFace(cv, lm, W, H, faceW, {upper:f_upper, mid:f_mid, lower:f_lower, browY, eye_angle:+eyeAngle.toFixed(2), face_HW:+faceRatio.toFixed(2)});
+  const overlayImg = overlayFace(cv, lm, W, H, faceW, {upper:f_upper, mid:f_mid, lower:f_lower, browY, topY:hairTop.y, eye_angle:+eyeAngle.toFixed(2), face_HW:+faceRatio.toFixed(2)});
 
   // ---------- 랜드마크 오버레이 (개발/검수 모드 전용) ----------
   if(DEV){
@@ -562,7 +565,7 @@ function analyze(img){
     wc_color: warm_cool,                    // 색채 측정 단독 신호 (보조로 강등 — 가중 0.2)
     draping: {r1:null, r2:null, r3:null, r4:null},
     conf_base: confidence,
-    quality:{pass:true, light:+(lum/255).toFixed(2), tilt_deg:+tilt.toFixed(1), light_ref:refType, L_corrected, L_gain:+L_gain.toFixed(3), L_shift:+L_shift.toFixed(1), bg_blown:bgBlown, bg_dim:bgDim, forehead_used:browDelta<=18, global_sat:+globalSat.toFixed(1), hazy, device:DEVICE, ua:(/Mobi/i.test(navigator.userAgent)?"mobile":"desktop")},
+    quality:{pass:true, light:+(lum/255).toFixed(2), tilt_deg:+tilt.toFixed(1), light_ref:refType, L_corrected, L_gain:+L_gain.toFixed(3), L_shift:+L_shift.toFixed(1), bg_blown:bgBlown, bg_dim:bgDim, forehead_used:browDelta<=18, hairline_detected:hairTop.detected, global_sat:+globalSat.toFixed(1), hazy, device:DEVICE, ua:(/Mobi/i.test(navigator.userAgent)?"mobile":"desktop")},
     axes_partial:{soft_deep:+soft_deep.toFixed(2), line_score:+lineScore.toFixed(2)},
     color:{ // ── 5기준 체계: 웜쿨 / 명도 / 채도 / 탁기 / 대비 ──
       hue_angle:+hue.toFixed(1), skin_a:+a_corr.toFixed(1), skin_b:+b_corr.toFixed(1),
@@ -616,6 +619,32 @@ const R4_VARIANTS = {
   cool:{variant:"blue",   opts:[{v:"vivid",name:"선명한 블루",color:"#5793DF"},{v:"tonedown",name:"차분한 블루",color:"#8591AB"}]},
   both:{variant:"rose",   opts:[{v:"vivid",name:"선명한 로즈",color:"#DB707C"},{v:"tonedown",name:"차분한 로즈",color:"#AC8889"}]}
 };
+// ---------- 헤어라인 검출 (상안부 꼭대기 = 이마 끝) ----------
+// MediaPipe 메시 최상단(10번)은 이마 중간에서 끝난다 — 삼정 비율의 기준(헤어라인)에 못 미침 (대표 실측 지적 2026-07-22).
+// 이마 중간에서 위로 세로선 3개를 스캔, '피부색 닮음'이 끊기는 첫 지속 지점(3연속 비피부)을 헤어라인으로 본다.
+// 2/3선 이상에서 못 찾으면 10번 폴백 + hairline_detected:false (없는 확신을 만들지 않는다).
+function detectHairline(ctx, lm, W, H, faceW, skin){
+  const top10 = P(lm,10,W,H);
+  const xs = [top10.x - faceW*0.08, top10.x, top10.x + faceW*0.08];
+  const maxRise = faceW*0.6;
+  const ys=[];
+  for(const x of xs){
+    let boundary=null, run=0;
+    for(let dy=2; dy<maxRise; dy+=2){
+      const y = top10.y - dy;
+      if(y<2) break;
+      const px = sampleLab(ctx, x, y, 2);
+      const skinLike = Math.abs(px.L-skin.L)<14 && Math.abs(px.a-skin.a)<9 && Math.abs(px.b-skin.b)<12;
+      if(!skinLike){ run++; if(run>=3){ boundary = y + 6; break; } }
+      else run=0;
+    }
+    if(boundary!==null && boundary < top10.y - 4) ys.push(boundary);
+  }
+  if(ys.length<2) return {y: top10.y, detected:false};
+  ys.sort((a,b)=>a-b);
+  return {y: ys[Math.floor(ys.length/2)], detected:true};
+}
+
 function cropFace(cv, lm, W, H, faceW){
   const cx=(P(lm,234,W,H).x+P(lm,454,W,H).x)/2;
   const cy=(P(lm,10,W,H).y+P(lm,152,W,H).y)/2;
@@ -643,7 +672,7 @@ function overlayFace(cv, lm, W, H, faceW, m){
   const label=(txt,x,y)=>{g.font="700 11px -apple-system,sans-serif";g.fillStyle="#fff";g.strokeStyle="rgba(0,0,0,.55)";g.lineWidth=3;g.strokeText(txt,x,y);g.fillText(txt,x,y);};
 
   // ① 3분할 가로선 — analyze() 3분할 계산과 동일 지점(이마 10 / 눈썹 browY / 코밑 2 / 턱끝 152)
-  const pTop=T(P(lm,10,W,H)), pBrow=T({x:0,y:m.browY}), pNose=T(P(lm,2,W,H)), pChin=T(P(lm,152,W,H));
+  const pTop=T({x:P(lm,10,W,H).x, y:m.topY}), pBrow=T({x:0,y:m.browY}), pNose=T(P(lm,2,W,H)), pChin=T(P(lm,152,W,H));
   [pTop,pBrow,pNose,pChin].forEach(p=>hline(p.y,"rgba(255,255,255,.85)"));
   label(`상 ${(m.upper*100).toFixed(0)}%`, 8, (pTop.y+pBrow.y)/2+4);
   label(`중 ${(m.mid*100).toFixed(0)}%`, 8, (pBrow.y+pNose.y)/2+4);
@@ -804,7 +833,7 @@ function finalize(){
       contrast_anchor:{basis:"hair", hair_L:S.color.hair_L, gate:+hairG.toFixed(2), band:+conH.toFixed(2)},
       axw:[0,1,0,+(0.3*hairG).toFixed(2)],
       five_axis:{warm_cool:WC.value, brightness:+N.bright.toFixed(2), saturation:+N.sat.toFixed(2), muteness:+N.mute.toFixed(2), contrast:+conH.toFixed(2), contrast_legacy_iris:+N.con.toFixed(2)}},
-    engine_ver:"photo_v2.0_sat_core"
+    engine_ver:"photo_v2.1_hairline"
   };
   render(out);
   $("status").textContent="✅ 분석 완료";
