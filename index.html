@@ -117,7 +117,10 @@ details[open] summary::after{content:" ▴";}
     <!-- 즉시촬영 모드: 실시간 가이드(밝기·거리·정면·타원 정렬) 후 촬영 -->
     <div id="liveWrap" style="display:none;margin-top:12px">
       <div style="position:relative;border-radius:12px;overflow:hidden;background:#111">
-        <video id="liveVideo" autoplay playsinline muted style="width:100%;display:block;transform:scaleX(-1)"></video>
+        <!-- iOS Safari에서 video 요소 직접 표시가 종종 검게 나오는 문제(WebKit) →
+             video는 프레임 소스로만 두고, 화면에는 캔버스로 매 프레임 미러링해 그린다 -->
+        <video id="liveVideo" autoplay playsinline muted style="position:absolute;width:2px;height:2px;opacity:0;pointer-events:none"></video>
+        <canvas id="livePrev" style="width:100%;display:block"></canvas>
         <canvas id="liveOverlay" style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"></canvas>
       </div>
       <div id="liveMsg" class="small" style="text-align:center;margin-top:8px;font-size:13.5px;min-height:1.6em">카메라 준비 중...</div>
@@ -728,8 +731,17 @@ function finalize(){
 
 // ---------- 즉시촬영(라이브 카메라) 모드 ----------
 // 실시간 가이드는 업로드 게이트와 같은 임계값을 씁니다 — 찍기 전에 미리 통과시키는 것이 목적.
-let liveStream=null, liveTimer=null;
+let liveStream=null, liveTimer=null, livePrevRaf=null;
 const liveWork=document.createElement("canvas");   // 검사용 저해상 프레임
+function livePreviewLoop(){
+  const v=$("liveVideo"), pc=$("livePrev");
+  if(v.videoWidth){
+    if(pc.width!==v.videoWidth){ pc.width=v.videoWidth; pc.height=v.videoHeight; }
+    const g=pc.getContext("2d");
+    g.save(); g.scale(-1,1); g.drawImage(v,-pc.width,0); g.restore();   // 거울 모드
+  }
+  livePrevRaf=requestAnimationFrame(livePreviewLoop);
+}
 async function liveStart(){
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
     $("status").innerHTML=`<div class="warn">이 브라우저에선 카메라를 쓸 수 없어요 — 사진 선택으로 진단해주세요</div>`; return;
@@ -741,13 +753,18 @@ async function liveStart(){
   }
   $("liveWrap").style.display="block";
   $("resultCard").style.display="none"; $("drapeCard").style.display="none";
-  const v=$("liveVideo"); v.srcObject=liveStream;
+  const v=$("liveVideo");
+  v.setAttribute("playsinline",""); v.setAttribute("webkit-playsinline","");
+  v.srcObject=liveStream;
   try{ await v.play(); }catch(e){}
+  v.addEventListener("loadedmetadata", ()=>{ v.play().catch(()=>{}); }, {once:true});
   $("status").textContent="";
   liveTimer=setInterval(liveCheck, 400);
+  livePreviewLoop();
 }
 function liveStop(){
   if(liveTimer){ clearInterval(liveTimer); liveTimer=null; }
+  if(livePrevRaf){ cancelAnimationFrame(livePrevRaf); livePrevRaf=null; }
   if(liveStream){ liveStream.getTracks().forEach(t=>t.stop()); liveStream=null; }
   $("liveWrap").style.display="none";
 }
@@ -783,8 +800,8 @@ function liveCheck(){
   $("liveMsg").textContent=msg;
   $("liveMsg").style.color = pass ? "#2C6B3A" : "var(--sub)";
   // 타원 가이드라인
-  const ov=$("liveOverlay");
-  ov.width=v.clientWidth; ov.height=v.clientHeight;
+  const ov=$("liveOverlay"), pv=$("livePrev");
+  ov.width=pv.clientWidth; ov.height=pv.clientHeight;
   const g=ov.getContext("2d");
   g.clearRect(0,0,ov.width,ov.height);
   g.strokeStyle = pass ? "rgba(80,200,120,.95)" : "rgba(255,255,255,.75)";
