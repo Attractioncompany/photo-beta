@@ -142,6 +142,7 @@ details[open] summary::after{content:" ▴";}
         <canvas id="liveOverlay" style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"></canvas>
       </div>
       <div id="liveMsg" class="small" style="text-align:center;margin-top:8px;font-size:13.5px;min-height:1.6em">카메라 준비 중...</div>
+      <div id="liveDbg" style="text-align:center;font-size:12px;color:#B76BA3;font-family:monospace;margin-top:2px">🔧 대기</div><!-- [DEBUG] 원인 확정 후 제거 -->
       <button class="btn" id="shotBtn">📷 촬영</button>
       <button class="btn sub" id="liveCloseBtn">닫기</button>
     </div>
@@ -756,13 +757,18 @@ function finalize(){
 // 실시간 가이드는 업로드 게이트와 같은 임계값을 씁니다 — 찍기 전에 미리 통과시키는 것이 목적.
 let liveStream=null, liveTimer=null, livePrevRaf=null;
 const liveWork=document.createElement("canvas");   // 검사용 저해상 프레임
+let __dbgRaf=0;   // [DEBUG] 라이브 프리뷰 진단 — 원인 확정 후 제거
 function livePreviewLoop(){
   const v=$("liveVideo"), pc=$("livePrev");
+  __dbgRaf++;
+  let luma=-1;   // -1: videoWidth=0(프레임없음) / -2: getImageData throw / 0~255: 캔버스 중앙 픽셀 밝기
   if(v.videoWidth){
     if(pc.width!==v.videoWidth){ pc.width=v.videoWidth; pc.height=v.videoHeight; }
     const g=pc.getContext("2d");
     g.drawImage(v,0,0);   // 미러 없이 그린다(인식 경로와 동일 = iOS 실기기 검증됨). 좌우반전은 CSS로.
+    try{ const px=g.getImageData(pc.width>>1, pc.height>>1, 1, 1).data; luma=Math.round(px[0]*0.299+px[1]*0.587+px[2]*0.114); }catch(e){ luma=-2; }
   }
+  const dbg=$("liveDbg"); if(dbg){ dbg.textContent=`🔧 vW=${v.videoWidth} raf=${__dbgRaf} luma=${luma}`; }
   livePrevRaf=requestAnimationFrame(livePreviewLoop);
 }
 async function liveStart(){
