@@ -150,6 +150,14 @@ details[open] summary::after{content:" ▴";}
       <button class="btn" id="shotBtn">📷 촬영</button>
       <button class="btn sub" id="liveCloseBtn">닫기</button>
     </div>
+    <!-- 촬영 확인 단계 (대표 피드백 2026-07-22) — 찍힌 사진을 보고 유저가 결정 -->
+    <div id="shotConfirm" style="display:none;margin-top:12px">
+      <img id="shotPreview" alt="방금 촬영한 사진" style="width:100%;border-radius:12px;display:block"/><!-- 반전 없음 — 라이브 화면과 같은 방향이어야 "내가 본 그 장면" -->
+
+      <div class="small" style="text-align:center;margin-top:8px">방금 찍힌 사진이에요 — 이대로 볼까요?</div><!-- [문구검수전] -->
+      <button class="btn" id="shotUseBtn">이 사진으로 분석하기</button>
+      <button class="btn sub" id="shotRetryBtn">다시 찍기</button>
+    </div>
     <canvas id="cv" style="display:none;margin-top:12px"></canvas>
   </div>
   <button class="btn sub stepnav" id="backStep1Btn">← 촬영 준비로 돌아가기</button>
@@ -298,6 +306,7 @@ $("file").addEventListener("change", async ev=>{
   // 같은 사진을 다시 골라도 인식되도록 선택 기록을 비웁니다 (f 객체는 그대로 살아 있습니다)
   ev.target.value="";
   if(!f||!engine) return;
+  shotPending=null; $("shotConfirm").style.display="none";   // 촬영 확인 대기 중이었다면 정리 (갤러리 경로로 전환)
   goStep(2);
   $("status").textContent="분석 중...";
   try{ DEVICE = readExifDevice(await f.slice(0,131072).arrayBuffer()); }catch(e){ DEVICE="exif_err"; }
@@ -841,7 +850,7 @@ function finalize(){
 
 // ---------- 즉시촬영(라이브 카메라) 모드 ----------
 // 실시간 가이드는 업로드 게이트와 같은 임계값을 씁니다 — 찍기 전에 미리 통과시키는 것이 목적.
-let liveStream=null, liveTimer=null, livePrevRaf=null, livePassStreak=0;
+let liveStream=null, liveTimer=null, livePrevRaf=null;
 // 촬영 순간 흰 플래시 (햅틱 대체 — iOS 웹은 진동 API 미지원, REPLY_dev_VLAS §1-2)
 function liveFlash(){
   const wrap=$("liveWrap"); if(!wrap) return;
@@ -869,11 +878,9 @@ async function liveStart(){
   try{ await v.play(); }catch(e){}
   v.addEventListener("loadedmetadata", ()=>{ v.play().catch(()=>{}); }, {once:true});
   $("status").textContent="";
-  livePassStreak=0;
   liveTimer=setInterval(liveCheck, 400);
 }
 function liveStop(){
-  livePassStreak=0;
   if(liveTimer){ clearInterval(liveTimer); liveTimer=null; }
   if(livePrevRaf){ cancelAnimationFrame(livePrevRaf); livePrevRaf=null; }
   if(liveStream){ liveStream.getTracks().forEach(t=>t.stop()); liveStream=null; }
@@ -908,18 +915,8 @@ function liveCheck(){
     else if(offCenter > 0.18)    msg="얼굴을 가운데 타원에 맞춰주세요";
     else { msg="좋아요! 이대로 찍어주세요 ✨"; pass=true; }
   }
-  // 자동 촬영 (VLAS 이식 #3 · Plan E): 통과 0.4s×3연속 유지 시 자동 캡처. 햅틱은 iOS 웹 미지원 → 플래시로 대체
-  if(pass){
-    livePassStreak++;
-    const left = 3 - livePassStreak;
-    if(left > 0) msg += ` — ${left}`;           /* [문구검수전] 카운트 표기 */
-    else {
-      $("liveMsg").textContent = msg;
-      liveFlash();
-      liveCapture();
-      return;
-    }
-  } else { livePassStreak = 0; }
+  // 자동 촬영은 대표 피드백(2026-07-22)으로 철회 — "어떤 상태로 찍혔는지 확인이 안 되어 불쾌"
+  // 대신 수동 촬영 후 확인 단계(shotConfirm)로 통제감을 준다. 재도입하려면 대표 승인 필요.
   $("liveMsg").textContent=msg;
   $("liveMsg").style.color = pass ? "#2C6B3A" : "var(--sub)";
   // 타원 가이드라인
@@ -934,21 +931,41 @@ function liveCheck(){
   g.stroke();
   $("shotBtn").style.background = pass ? "#2C6B3A" : "var(--accent)";
 }
+// 촬영 → 즉시 분석이 아니라 확인 단계를 거친다 (대표 피드백 2026-07-22: "어떤 상태로 찍혔는지 확인이 안 되면 불쾌")
+let shotPending=null;   // 확인 대기 중인 촬영본 dataURL — 메모리만, 저장·전송 없음
 function liveCapture(){
   const v=$("liveVideo");
   if(!v.videoWidth) return;
   const c=document.createElement("canvas"); c.width=v.videoWidth; c.height=v.videoHeight;
   c.getContext("2d").drawImage(v,0,0);
+  liveFlash();
   liveStop();
+  shotPending=c.toDataURL("image/jpeg",0.95);
+  $("shotPreview").src=shotPending;
+  $("shotConfirm").style.display="block";
+  $("status").textContent="";
+}
+function shotUse(){
+  if(!shotPending) return;
+  $("shotConfirm").style.display="none";
   DEVICE="live_capture";           // EXIF가 없는 경로 — 기기 정보 대신 촬영 모드 표기
   $("status").textContent="분석 중...";
   const img=new Image();
   img.onload=()=>analyze(img);
   img.onerror=()=>gateFail("촬영한 사진을 읽지 못했어요 — 한 번만 더 찍어주세요");
-  img.src=c.toDataURL("image/jpeg",0.95);
+  img.src=shotPending;
+  shotPending=null;
+}
+function shotRetry(){
+  shotPending=null;
+  $("shotPreview").src="";
+  $("shotConfirm").style.display="none";
+  liveStart();
 }
 $("liveBtn").addEventListener("click", liveStart);
 $("shotBtn").addEventListener("click", liveCapture);
+$("shotUseBtn").addEventListener("click", shotUse);
+$("shotRetryBtn").addEventListener("click", shotRetry);
 $("liveCloseBtn").addEventListener("click", ()=>{ liveStop(); $("status").textContent="구미가 준비됐어요 — 사진을 선택하거나 바로 촬영해주세요"; });
 
 // 통과한 항목도 함께 알려 진행감을 줍니다. 예) "밝기·정면 좋아요. 딱 하나만 더요."
