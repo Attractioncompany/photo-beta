@@ -25,6 +25,16 @@ canvas{width:100%;border-radius:12px;background:#eee;}
 .gauge .lbl{display:flex;justify-content:space-between;font-size:12px;color:var(--sub);margin-bottom:5px;}
 .gauge .bar{height:14px;background:var(--line);border-radius:7px;position:relative;}
 .gauge .dot{position:absolute;top:-3px;width:20px;height:20px;border-radius:50%;background:var(--deep);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.25);transform:translateX(-50%);}
+/* 지표 카드 6단 골격 (VLAS 이식 #1+#6 · Plan E Task2) — analyze()·band 상수 불변, 표시 전용 */
+.ind-card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-top:10px;}
+.ind-card .ind-desc{font-size:12px;color:var(--sub);line-height:1.6;margin-bottom:10px;}
+.ind-card .ind-bar{height:10px;background:var(--line);border-radius:5px;position:relative;margin-top:4px;}
+.ind-card .ind-dot{position:absolute;top:-3px;width:16px;height:16px;border-radius:50%;background:var(--deep);border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.2);transform:translateX(-50%);}
+.ind-card .ind-range{display:flex;justify-content:space-between;font-size:11.5px;color:var(--sub);margin-top:8px;}
+.ind-card .ind-badge{display:inline-block;margin-top:8px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:700;background:var(--accent-btn);color:#fff;}
+.ind-card .ind-bands{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;}
+.ind-card .ind-bands span{font-size:11px;padding:4px 8px;border-radius:8px;background:var(--line);color:var(--sub);}
+.ind-card .ind-bands span.on{background:var(--accent-btn);color:#fff;font-weight:700;}
 .warn{background:#FFF3F0;border:1px solid #F5C4B8;color:#A5432A;border-radius:12px;padding:12px 14px;font-size:13.5px;line-height:1.6;margin-top:12px;}
 .ok{background:#F0F8F1;border:1px solid #BFE3C5;color:#2C6B3A;}
 pre{background:#2B2233;color:#E9E2F0;border-radius:12px;padding:14px;font-size:11.5px;overflow-x:auto;margin-top:12px;line-height:1.5;}
@@ -178,8 +188,14 @@ details[open] summary::after{content:" ▴";}
         <div class="bar"><div class="dot" id="sdDot"></div></div>
       </div>
     </details>
+    <!-- 지표 카드 6단 골격 (VLAS 이식 #1+#6 · Plan E Task2) — 기존 게이지 아래, 오버레이·세부측정값 위 -->
+    <div id="indCards"></div>
     <!-- 지표는 기본 화면에 수치+해설 병기로 표시 (대표 2회 확정: 07-11, 07-20 · REQUEST_dev_ux_restore §1)
          이전에 있던 "수치는 내부·검증·B2B 전용" 근거는 이 결정으로 폐기됐습니다 — 되돌리려면 대표 승인 필요 -->
+    <div id="overlayBox" style="display:none">
+      <div class="tag" style="margin-top:16px">내 사진에서 이렇게 쟀어요</div><!-- [문구검수전] -->
+      <img id="overlayImg" alt="측정 오버레이" style="width:100%;max-width:320px;border-radius:12px;display:block;margin:8px auto"/>
+    </div>
     <div style="margin-top:16px" class="tag">세부 측정값</div>
     <div id="metrics"></div>
     <div id="warnRest" class="small"></div>
@@ -526,6 +542,8 @@ function analyze(img){
 
   // 드레이핑에 쓸 얼굴 크롭 — 개발 오버레이를 그리기 전에 떠 둡니다(점이 찍히면 색 비교가 흐려져요)
   const faceCrop = cropFace(cv, lm, W, H, faceW);
+  // 셀카 측정 오버레이(VLAS #2) — 위와 같은 이유로 dev 랜드마크 점이 찍히기 전에 뜹니다. STATE 메모리 전용, out(JSON)에는 넣지 않습니다.
+  const overlayImg = overlayFace(cv, lm, W, H, faceW, {upper:f_upper, mid:f_mid, lower:f_lower, browY, eye_angle:+eyeAngle.toFixed(2), face_HW:+faceRatio.toFixed(2)});
 
   // ---------- 랜드마크 오버레이 (개발/검수 모드 전용) ----------
   if(DEV){
@@ -539,6 +557,7 @@ function analyze(img){
   // 드레이핑·자가체크 응답을 받은 뒤 finalize()에서 웜쿨을 합성합니다.
   STATE = {
     crop: faceCrop,
+    overlay: overlayImg,   // 셀카 측정 오버레이(VLAS #2) — 메모리 전용, finalize()의 out(JSON)에 절대 포함하지 않는다
     N,
     wc_color: warm_cool,                    // 색채 측정 단독 신호 (보조로 강등 — 가중 0.2)
     draping: {r1:null, r2:null, r3:null, r4:null},
@@ -605,6 +624,43 @@ function cropFace(cv, lm, W, H, faceW){
   const g=c.getContext("2d");
   g.drawImage(cv, cx-r, cy-r, r*2, r*2, 0, 0, 320, 320);
   return c.toDataURL("image/jpeg", 0.92);
+}
+// 셀카 측정 오버레이 (VLAS 이식 #2 · REPLY_dev_VLAS 2026-07-22) — 온디바이스 렌더 전용.
+// 서버 전송·저장·JSON 포함 전부 금지(STATE 메모리에만). 새 측정 없음 — analyze()가 이미 계산한
+// 랜드마크 인덱스(10/152/234/454 얼굴박스, 105·334·2 3분할, 33·133·362·263 눈꼬리)와
+// 수치(m.upper/mid/lower/eye_angle/face_HW)를 그대로 시각화만 합니다.
+function overlayFace(cv, lm, W, H, faceW, m){
+  const cx=(P(lm,234,W,H).x+P(lm,454,W,H).x)/2;
+  const cy=(P(lm,10,W,H).y+P(lm,152,W,H).y)/2;
+  const r=Math.max(20, faceW*0.78);
+  const c=document.createElement("canvas"); c.width=c.height=320;
+  const g=c.getContext("2d");
+  g.drawImage(cv, cx-r, cy-r, r*2, r*2, 0, 0, 320, 320);
+  const accent=(getComputedStyle(document.documentElement).getPropertyValue("--accent-btn")||"#9C4680").trim()||"#9C4680";
+  const T=(pt)=>({x:(pt.x-(cx-r))/(2*r)*320, y:(pt.y-(cy-r))/(2*r)*320});
+  const hline=(y,col)=>{g.strokeStyle=col;g.lineWidth=1.5;g.beginPath();g.moveTo(0,y);g.lineTo(320,y);g.stroke();};
+  const line=(a,b,col)=>{g.strokeStyle=col;g.lineWidth=2;g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();};
+  const label=(txt,x,y)=>{g.font="700 11px -apple-system,sans-serif";g.fillStyle="#fff";g.strokeStyle="rgba(0,0,0,.55)";g.lineWidth=3;g.strokeText(txt,x,y);g.fillText(txt,x,y);};
+
+  // ① 3분할 가로선 — analyze() 3분할 계산과 동일 지점(이마 10 / 눈썹 browY / 코밑 2 / 턱끝 152)
+  const pTop=T(P(lm,10,W,H)), pBrow=T({x:0,y:m.browY}), pNose=T(P(lm,2,W,H)), pChin=T(P(lm,152,W,H));
+  [pTop,pBrow,pNose,pChin].forEach(p=>hline(p.y,"rgba(255,255,255,.85)"));
+  label(`상 ${(m.upper*100).toFixed(0)}%`, 8, (pTop.y+pBrow.y)/2+4);
+  label(`중 ${(m.mid*100).toFixed(0)}%`, 8, (pBrow.y+pNose.y)/2+4);
+  label(`하 ${(m.lower*100).toFixed(0)}%`, 8, (pNose.y+pChin.y)/2+4);
+
+  // ② 눈꼬리 기울기 — analyze() eyeAngle과 동일 랜드마크(33·133·362·263)
+  const eL=T(P(lm,33,W,H)), eLi=T(P(lm,133,W,H)), eRi=T(P(lm,362,W,H)), eR=T(P(lm,263,W,H));
+  line(eLi,eL,accent); line(eRi,eR,accent);
+  label(`눈꼬리 ${m.eye_angle>0?"+":""}${m.eye_angle}`, Math.max(4,(eL.x+eR.x)/2-32), Math.min(eL.y,eR.y)-8);
+
+  // ③ 얼굴 가로세로 박스 — faceW(234↔454)·faceH(10↔152)와 동일
+  const bTL=T({x:cx-faceW/2, y:P(lm,10,W,H).y}), bBR=T({x:cx+faceW/2, y:P(lm,152,W,H).y});
+  g.strokeStyle="rgba(255,255,255,.85)"; g.lineWidth=1.5;
+  g.strokeRect(bTL.x, bTL.y, bBR.x-bTL.x, bBR.y-bTL.y);
+  label(`H/W ${m.face_HW}`, bTL.x+6, bBR.y-6);
+
+  return c.toDataURL("image/jpeg", 0.9);
 }
 function askDraping(id){
   const R=ROUNDS[id];
@@ -756,7 +812,15 @@ function finalize(){
 
 // ---------- 즉시촬영(라이브 카메라) 모드 ----------
 // 실시간 가이드는 업로드 게이트와 같은 임계값을 씁니다 — 찍기 전에 미리 통과시키는 것이 목적.
-let liveStream=null, liveTimer=null, livePrevRaf=null;
+let liveStream=null, liveTimer=null, livePrevRaf=null, livePassStreak=0;
+// 촬영 순간 흰 플래시 (햅틱 대체 — iOS 웹은 진동 API 미지원, REPLY_dev_VLAS §1-2)
+function liveFlash(){
+  const wrap=$("liveWrap"); if(!wrap) return;
+  const f=document.createElement("div");
+  f.style.cssText="position:fixed;inset:0;background:#fff;opacity:.9;z-index:9999;pointer-events:none;transition:opacity .25s";
+  document.body.appendChild(f);
+  requestAnimationFrame(()=>{ f.style.opacity="0"; setTimeout(()=>f.remove(), 300); });
+}
 const liveWork=document.createElement("canvas");   // 검사용 저해상 프레임(인식 전용)
 // 화면 프리뷰는 비디오 직접 표시로 전환 — livePreviewLoop(캔버스 미러)은 iOS 합성 실패로 폐기.
 async function liveStart(){
@@ -776,9 +840,11 @@ async function liveStart(){
   try{ await v.play(); }catch(e){}
   v.addEventListener("loadedmetadata", ()=>{ v.play().catch(()=>{}); }, {once:true});
   $("status").textContent="";
+  livePassStreak=0;
   liveTimer=setInterval(liveCheck, 400);
 }
 function liveStop(){
+  livePassStreak=0;
   if(liveTimer){ clearInterval(liveTimer); liveTimer=null; }
   if(livePrevRaf){ cancelAnimationFrame(livePrevRaf); livePrevRaf=null; }
   if(liveStream){ liveStream.getTracks().forEach(t=>t.stop()); liveStream=null; }
@@ -813,6 +879,18 @@ function liveCheck(){
     else if(offCenter > 0.18)    msg="얼굴을 가운데 타원에 맞춰주세요";
     else { msg="좋아요! 이대로 찍어주세요 ✨"; pass=true; }
   }
+  // 자동 촬영 (VLAS 이식 #3 · Plan E): 통과 0.4s×3연속 유지 시 자동 캡처. 햅틱은 iOS 웹 미지원 → 플래시로 대체
+  if(pass){
+    livePassStreak++;
+    const left = 3 - livePassStreak;
+    if(left > 0) msg += ` — ${left}`;           /* [문구검수전] 카운트 표기 */
+    else {
+      $("liveMsg").textContent = msg;
+      liveFlash();
+      liveCapture();
+      return;
+    }
+  } else { livePassStreak = 0; }
   $("liveMsg").textContent=msg;
   $("liveMsg").style.color = pass ? "#2C6B3A" : "var(--sub)";
   // 타원 가이드라인
@@ -862,6 +940,13 @@ function gateFail(msg){
 }
 function render(o){
   goStep(4);
+  // 셀카 측정 오버레이(VLAS #2) — STATE 메모리 값만 읽음, out(o)엔 없음. 계산 실패 시 블록 숨김.
+  if(STATE && STATE.overlay){
+    $("overlayImg").src=STATE.overlay;
+    $("overlayBox").style.display="block";
+  }else{
+    $("overlayBox").style.display="none";
+  }
   const proto={ "봄 라이트":[0.85,0.25,0.15,0.20],"봄 클리어":[0.80,0.40,0.10,0.80],"봄 스트롱":[0.45,0.65,0.30,0.70],"가을 뮤트":[0.60,0.45,0.75,0.40],"가을 스트롱":[0.50,0.70,0.40,0.45],"가을 딥":[0.30,0.55,0.70,0.55],"여름 라이트":[0.85,0.20,0.15,0.30],"여름 클리어":[0.70,0.45,0.20,0.45],"여름 뮤트":[0.55,0.45,0.75,0.35],"겨울 클리어":[0.80,0.25,0.15,0.80],"겨울 스트롱":[0.50,0.60,0.30,0.75],"겨울 딥":[0.35,0.65,0.45,0.50] };
   $("resultCard").style.display="block";
   $("wcDot").style.left=((o.axes.warm_cool+1)/2*100)+"%";
@@ -922,6 +1007,44 @@ function render(o){
     return `<div class="gumi-observe" style="background:#F6F1FF;border-radius:12px;padding:14px 16px;font-size:13.5px;line-height:1.8;margin-bottom:12px">${out}</div>`;
   }
   const fx=o.pc12.five_axis;
+  // ── 지표 카드 6단 골격 (VLAS 이식 #1+#6 · Plan E Task2) ──
+  // 밴드 경계값은 위 band()(.78/.62/.42/.28)·wc_borderline 판정의 ±0.35 그대로 재사용 — 새 기준 신설 없음
+  function indicatorCard(cfg){
+    const {icon,label,desc,value,isWC}=cfg;
+    let dotPct,badgeTxt,rangeTxt,bandsHtml;
+    if(isWC){
+      dotPct=clamp((value+1)/2*100,0,100);
+      const dir=value>0?"웜":"쿨";
+      // 배지 문구는 render() 상단 $("wcVal") 계산과 동일 서술어 재사용 (line 922-923)
+      badgeTxt = !o.pc12.wc_borderline ? dir+" 성향"
+        : Math.abs(value)<=0.35 ? "경계(미결정)" : dir+" 쪽 (확정 전)";
+      // 밴드 강조는 배지와 같은 분기(wc_borderline 우선)를 따라야 함 — 아니면 배지="웜 성향"인데 강조="경계"가 되는 불일치 발생
+      const cur = !o.pc12.wc_borderline ? dir : (Math.abs(value)<=0.35 ? "경계" : dir);
+      const buckets=[["쿨","≤ -0.35"],["경계","-0.35~0.35"],["웜","≥ 0.35"]];
+      bandsHtml=buckets.map(([t])=>`<span class="${t===cur?"on":""}">${t}</span>`).join("");
+      rangeTxt=`내 수치 ${value.toFixed(2)} · ${cur} 구간(${buckets.find(b=>b[0]===cur)[1]})`;
+    }else{
+      badgeTxt=band(value);
+      const buckets=[["낮음","~0.28"],["중하","0.28~0.42"],["중","0.42~0.62"],["중상","0.62~0.78"],["높음","0.78~"]];
+      bandsHtml=buckets.map(([t])=>`<span class="${t===badgeTxt?"on":""}">${t}</span>`).join("");
+      dotPct=clamp(value,0,1)*100;
+      rangeTxt=`내 수치 ${value.toFixed(2)} · ${badgeTxt} 구간(${buckets.find(b=>b[0]===badgeTxt)[1]})`;
+    }
+    return `<div class="ind-card">
+      <div class="ind-desc">${icon} <b>${label}</b> — ${desc}</div><!-- [문구검수전] -->
+      <div class="ind-bar"><div class="ind-dot" style="left:${dotPct}%"></div></div>
+      <div class="ind-range"><span>${rangeTxt}</span></div>
+      <div><span class="ind-badge">${badgeTxt}</span></div>
+      <div class="ind-bands">${bandsHtml}</div>
+    </div>`;
+  }
+  $("indCards").innerHTML = [
+    indicatorCard({icon:"❄️🔥",label:"웜쿨",desc:"피부 색상각(Hue)으로 웜/쿨 방향을 가늠해요",value:fx.warm_cool,isWC:true}),
+    indicatorCard({icon:"☀️",label:"명도",desc:"피부 밝기(L*)로 톤의 밝고 어두움을 가늠해요",value:fx.brightness,isWC:false}),
+    indicatorCard({icon:"🎨",label:"채도",desc:"피부 채도(Chroma)로 색감의 진하고 옅음을 가늠해요",value:fx.saturation,isWC:false}),
+    indicatorCard({icon:"🌫️",label:"탁기",desc:"채도 역산 근사로 톤이 가라앉은 정도를 가늠해요",value:fx.muteness,isWC:false}),
+    indicatorCard({icon:"⚫️",label:"대비",desc:"머리카락↔피부 대비로 또렷함 정도를 가늠해요",value:fx.contrast,isWC:false})
+  ].join("");
   const w=o.type8;
   const wcLabel = !o.pc12.wc_borderline?(fx.warm_cool>0?"웜":"쿨")
                 : Math.abs(fx.warm_cool)<=0.35?"웜쿨 경계":(fx.warm_cool>0?"웜":"쿨")+"(확정 전)";
