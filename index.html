@@ -499,7 +499,8 @@ function analyze(img){
 
   // ---------- [비율] 3분할·부위 비율 ----------
   // 상안부 꼭대기 = 검출된 헤어라인 (10번은 이마 중간 — 대표 지적 2026-07-22, engine v2.1)
-  const hairTop = detectHairline(ctx, lm, W, H, faceW, skin);
+  const hairTop = browDelta>18 ? {y:P(lm,10,W,H).y, detected:false}   // 이마가 가려짐(오염 검사) → 검출 시도 없이 폴백
+                : detectHairline(ctx, lm, W, H, faceW, brow);         // 기준 = 이마 자체 샘플(v2)
   const topPt = {x:P(lm,10,W,H).x, y:hairTop.y};
   const faceH = dist(topPt, P(lm,152,W,H));
   const browY = (P(lm,105,W,H).y + P(lm,334,W,H).y)/2;
@@ -640,10 +641,15 @@ const R4_VARIANTS = {
 // MediaPipe 메시 최상단(10번)은 이마 중간에서 끝난다 — 삼정 비율의 기준(헤어라인)에 못 미침 (대표 실측 지적 2026-07-22).
 // 이마 중간에서 위로 세로선 3개를 스캔, '피부색 닮음'이 끊기는 첫 지속 지점(3연속 비피부)을 헤어라인으로 본다.
 // 2/3선 이상에서 못 찾으면 10번 폴백 + hairline_detected:false (없는 확신을 만들지 않는다).
-function detectHairline(ctx, lm, W, H, faceW, skin){
+function detectHairline(ctx, lm, W, H, faceW, ref){
+  // v2 (대표 실기기 제보 2026-07-22): v1은 '피부색과 다르면 경계'라서 이마 번들거림(하이라이트)을
+  // 머리카락으로 오판해 경계를 너무 낮게 잡았다. v2 규칙 —
+  //   경계 = 어두워짐(모발) 또는 색조가 확 바뀜(염색모). 밝아지는 픽셀(반사·흰 배경)은 피부 취급.
+  //   흰 배경으로 이마→배경 직행(모발 없음)이면 경계 미검출 → 폴백(detected:false)이 정상 동작.
+  // ref는 이마 자체 샘플(brow) — 볼 평균보다 이마 스캔의 기준으로 적합.
   const top10 = P(lm,10,W,H);
-  const xs = [top10.x - faceW*0.08, top10.x, top10.x + faceW*0.08];
-  const maxRise = faceW*0.6;
+  const xs = [top10.x - faceW*0.10, top10.x, top10.x + faceW*0.10];
+  const maxRise = faceW*0.7;
   const ys=[];
   for(const x of xs){
     let boundary=null, run=0;
@@ -651,8 +657,9 @@ function detectHairline(ctx, lm, W, H, faceW, skin){
       const y = top10.y - dy;
       if(y<2) break;
       const px = sampleLab(ctx, x, y, 2);
-      const skinLike = Math.abs(px.L-skin.L)<14 && Math.abs(px.a-skin.a)<9 && Math.abs(px.b-skin.b)<12;
-      if(!skinLike){ run++; if(run>=3){ boundary = y + 6; break; } }
+      const darker = px.L < ref.L - 16;
+      const chromaShift = (Math.abs(px.a-ref.a) > 12 || Math.abs(px.b-ref.b) > 14) && px.L <= ref.L + 6;
+      if(darker || chromaShift){ run++; if(run>=3){ boundary = y + 6; break; } }
       else run=0;
     }
     if(boundary!==null && boundary < top10.y - 4) ys.push(boundary);
@@ -677,14 +684,18 @@ function cropFace(cv, lm, W, H, faceW){
 // 수치(m.upper/mid/lower/eye_angle/face_HW)를 그대로 시각화만 합니다.
 function overlayFace(cv, lm, W, H, faceW, m){
   const cx=(P(lm,234,W,H).x+P(lm,454,W,H).x)/2;
-  const cy=(P(lm,10,W,H).y+P(lm,152,W,H).y)/2;
   const r=Math.max(20, faceW*0.78);
-  const c=document.createElement("canvas"); c.width=c.height=320;
+  // 세로 범위: 헤어라인 위 여유 ~ 턱 아래 여유 (대표 지적 2026-07-22: 정사각 크롭이 이마 끝을 잘라 측정선이 화면 밖이었음)
+  const y0=Math.max(0, m.topY - faceW*0.15);
+  const y1=Math.min(H, P(lm,152,W,H).y + faceW*0.12);
+  const x0=cx-r, x1=cx+r;
+  const CW=320, CH=Math.max(320, Math.round(CW*(y1-y0)/(x1-x0)));
+  const c=document.createElement("canvas"); c.width=CW; c.height=CH;
   const g=c.getContext("2d");
-  g.drawImage(cv, cx-r, cy-r, r*2, r*2, 0, 0, 320, 320);
+  g.drawImage(cv, x0, y0, x1-x0, y1-y0, 0, 0, CW, CH);
   const accent=(getComputedStyle(document.documentElement).getPropertyValue("--accent-btn")||"#9C4680").trim()||"#9C4680";
-  const T=(pt)=>({x:(pt.x-(cx-r))/(2*r)*320, y:(pt.y-(cy-r))/(2*r)*320});
-  const hline=(y,col)=>{g.strokeStyle=col;g.lineWidth=1.5;g.beginPath();g.moveTo(0,y);g.lineTo(320,y);g.stroke();};
+  const T=(pt)=>({x:(pt.x-x0)/(x1-x0)*CW, y:(pt.y-y0)/(y1-y0)*CH});
+  const hline=(y,col)=>{g.strokeStyle=col;g.lineWidth=1.5;g.beginPath();g.moveTo(0,y);g.lineTo(CW,y);g.stroke();};
   const line=(a,b,col)=>{g.strokeStyle=col;g.lineWidth=2;g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();};
   const label=(txt,x,y)=>{g.font="700 11px -apple-system,sans-serif";g.fillStyle="#fff";g.strokeStyle="rgba(0,0,0,.55)";g.lineWidth=3;g.strokeText(txt,x,y);g.fillText(txt,x,y);};
 
@@ -700,8 +711,8 @@ function overlayFace(cv, lm, W, H, faceW, m){
   line(eLi,eL,accent); line(eRi,eR,accent);
   label(`눈꼬리 ${m.eye_angle>0?"+":""}${m.eye_angle}`, Math.max(4,(eL.x+eR.x)/2-32), Math.min(eL.y,eR.y)-8);
 
-  // ③ 얼굴 가로세로 박스 — faceW(234↔454)·faceH(10↔152)와 동일
-  const bTL=T({x:cx-faceW/2, y:P(lm,10,W,H).y}), bBR=T({x:cx+faceW/2, y:P(lm,152,W,H).y});
+  // ③ 얼굴 가로세로 박스 — faceW(234↔454)·faceH(헤어라인 topY↔152)와 동일 (박스 상단=측정 상단 일치)
+  const bTL=T({x:cx-faceW/2, y:m.topY}), bBR=T({x:cx+faceW/2, y:P(lm,152,W,H).y});
   g.strokeStyle="rgba(255,255,255,.85)"; g.lineWidth=1.5;
   g.strokeRect(bTL.x, bTL.y, bBR.x-bTL.x, bBR.y-bTL.y);
   label(`H/W ${m.face_HW}`, bTL.x+6, bBR.y-6);
