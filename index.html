@@ -557,7 +557,7 @@ function analyze(img){
   // 5축 정규화 (캘리브레이션 파라미터)
   const N = {
     bright: clamp((skinL-52)/26, 0, 1),            // 명도: L 52~78 밴드 (노출 정규화된 L 기준)
-    sat:    clamp((chroma-15)/25, 0, 1),           // 채도: chroma 15~40 밴드
+    sat:    clamp((chroma-12)/25, 0, 1),           // 채도 앵커 15→12 — 임시 보정(확정서 2026-07-22, 계통 쏠림 11/12 교정), 베타 n=60 재산출
     mute:   muteness,                              // 탁기
     con:    clamp((contrast-40)/22, 0, 1)          // 피부↔다크앵커 갭 밴드 40~62 — cal#7(대표 0.5대·지인 0.6대 정합)
   };
@@ -588,6 +588,7 @@ function analyze(img){
     axes_partial:{soft_deep:+soft_deep.toFixed(2), line_score:+lineScore.toFixed(2)},
     color:{ // ── 5기준 체계: 웜쿨 / 명도 / 채도 / 탁기 / 대비 ──
       hue_angle:+hue.toFixed(1), skin_a:+a_corr.toFixed(1), skin_b:+b_corr.toFixed(1),
+      skin_a_raw:+skin2.a.toFixed(1), skin_b_raw:+skin2.b.toFixed(1),   // 배경 보정 전 원시 — 기준표 vs 입력왜곡 분리판별(확정서 §4-3)
       skin_L:+skinL.toFixed(1), skin_L_raw:+skin2.L.toFixed(1), ita:+ita.toFixed(1),
       chroma:+chroma.toFixed(1),
       contrast_hair:+c_hair.toFixed(1), contrast_iris:+c_iris.toFixed(1), contrast_brow:+c_brow.toFixed(1), contrast_overall:+contrast.toFixed(1), contrast_basis:cbasis, dyed:DYED, hair_L:+hairL.toFixed(1)},
@@ -868,7 +869,7 @@ function finalize(){
       contrast_anchor:{basis:"hair", hair_L:S.color.hair_L, gate:+hairG.toFixed(2), band:+conH.toFixed(2)},
       axw:[0,1,0,+(0.3*hairG).toFixed(2)],
       five_axis:{warm_cool:WC.value, brightness:+N.bright.toFixed(2), saturation:+N.sat.toFixed(2), muteness:+N.mute.toFixed(2), contrast:+conH.toFixed(2), contrast_legacy_iris:+N.con.toFixed(2)}},
-    engine_ver:"photo_v2.1_hairline"
+    engine_ver:"photo_v2.2_sat_anchor"
   };
   render(out);
   $("status").textContent="✅ 분석 완료";
