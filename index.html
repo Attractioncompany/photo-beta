@@ -519,6 +519,20 @@ function analyze(img){
   const lipThick = dist(P(lm,13,W,H), P(lm,14,W,H))/faceH;
   const mouthW = dist(P(lm,61,W,H), P(lm,291,W,H))/faceW;
   const mouthCorner = -(((P(lm,61,W,H).y+P(lm,291,W,H).y)/2 - (P(lm,13,W,H).y+P(lm,14,W,H).y)/2)/faceH*100); // +상향
+  // ── 신규 측정 3종 (이론팀 스펙 2026-07-22 §5) — 내부 신호 수집. 유저 카드는 마케팅 검수 후 별도.
+  // brow_eye_gap: 눈썹(105/334)↔윗눈꺼풀(159/386) 세로거리 ÷ faceW. eye_open>0.22 게이트.
+  const _eyeVertH = (dist(P(lm,159,W,H),P(lm,145,W,H)) + dist(P(lm,386,W,H),P(lm,374,W,H)))/2;  // 눈 세로높이(배수 비교용)
+  const _browEyeRaw = (Math.abs(P(lm,105,W,H).y-P(lm,159,W,H).y) + Math.abs(P(lm,334,W,H).y-P(lm,386,W,H).y))/2;
+  const browEyeGap  = eyeOpen0>0.22 ? +( _browEyeRaw/faceW ).toFixed(3) : null;
+  const browEyeGapX = (eyeOpen0>0.22 && _eyeVertH>0) ? +( _browEyeRaw/_eyeVertH ).toFixed(2) : null; // 눈 세로높이 배수(참고)
+  // 입술 상/하 두께: dist(0,13)·dist(14,17) ÷ faceH. lip_thick(13,14)는 기존 유지.
+  const lipUpper = +(dist(P(lm,0,W,H),P(lm,13,W,H))/faceH).toFixed(3);
+  const lipLower = +(dist(P(lm,14,W,H),P(lm,17,W,H))/faceH).toFixed(3);
+  const lipUlRatio = lipUpper>0 ? +(lipLower/lipUpper).toFixed(2) : null;   // 하/상 비율
+  // temple_w: 눈꼬리 높이 좌우 최외곽 127/356 (좌표검증 2026-07-22: 눈꼬리Y Δ≈1px·최외곽) ÷ faceW. 내부 신호 전용 [가설].
+  const templeW = +(dist(P(lm,127,W,H),P(lm,356,W,H))/faceW).toFixed(3);
+  // 입 벌림 플래그(체크리스트 M2) — 전부 저장 원칙상 lip값은 남기고 플래그만. 임계 0.055는 잠정(이론팀 캘리브레이션 대기).
+  const mouthOpen = lipThick > 0.055;
 
   // ---------- [라인] 직선감·곡선감 ----------
   const chain=[172,136,150,149,176,148,152,377,400,378,379,365,397];
@@ -594,7 +608,10 @@ function analyze(img){
       contrast_hair:+c_hair.toFixed(1), contrast_iris:+c_iris.toFixed(1), contrast_brow:+c_brow.toFixed(1), contrast_overall:+contrast.toFixed(1), contrast_basis:cbasis, dyed:DYED, hair_L:+hairL.toFixed(1)},
     ratio:{face_HW:+faceRatio.toFixed(2), upper:+f_upper.toFixed(3), mid:+f_mid.toFixed(3), lower:+f_lower.toFixed(3),
       eye_len:+eyeLen.toFixed(3), interocular:+interocular.toFixed(2), nose_w:+noseW.toFixed(3), jaw_w:+jawW.toFixed(3),
-      lip_thick:+lipThick.toFixed(3), mouth_w:+mouthW.toFixed(3)},
+      lip_thick:+lipThick.toFixed(3), mouth_w:+mouthW.toFixed(3),
+      brow_eye_gap:browEyeGap, brow_eye_gap_x:browEyeGapX,           // 신규(§5) — eye_open>0.22 게이트, 미통과 시 null
+      lip_upper:lipUpper, lip_lower:lipLower, lip_ul_ratio:lipUlRatio, mouth_open:mouthOpen,
+      temple_w:templeW},                                             // [가설] 내부 신호 전용, 카드 비노출
     line:{jaw_angular_deg:+jawAngular.toFixed(1), chin_angle_deg:+chinAngle.toFixed(1), brow_arch_deg:+browArch.toFixed(1),
       eye_angle:+eyeAngle.toFixed(2), eye_open:+eyeOpen.toFixed(2), mouth_corner:+mouthCorner.toFixed(2)}
   };
