@@ -114,12 +114,6 @@ details[open] summary::after{content:" ▴";}
       <label class="seg"><input type="radio" name="dye" value="n" checked> 자연모</label>
       <label class="seg"><input type="radio" name="dye" value="y"> 염색모</label>
     </div>
-    <div style="margin:14px 0 8px;font-size:13.5px"><b>골드/실버 액세서리 중 뭐가 더 잘 받는 편이에요?</b></div>
-    <div class="seg-row" role="radiogroup" aria-label="골드/실버 중 잘 받는 쪽">
-      <label class="seg"><input type="radio" name="gs" value="gold"> 골드</label>
-      <label class="seg"><input type="radio" name="gs" value="silver"> 실버</label>
-      <label class="seg"><input type="radio" name="gs" value="unknown" checked> 잘 모르겠어요</label>
-    </div>
   </div>
   <button class="btn stepnav" id="toStep2Btn">사진 선택으로 이동</button>
   </div><!-- /step1 -->
@@ -547,7 +541,6 @@ function analyze(img){
     crop: faceCrop,
     N,
     wc_color: warm_cool,                    // 색채 측정 단독 신호 (보조로 강등 — 가중 0.2)
-    selfcheck: "unknown",   // 실제 값은 finalize() 시점에 읽습니다 (사진을 먼저 고르고 답해도 반영되게)
     draping: {r1:null, r2:null, r3:null, r4:null},
     conf_base: confidence,
     quality:{pass:true, light:+(lum/255).toFixed(2), tilt_deg:+tilt.toFixed(1), light_ref:refType, L_corrected, L_gain:+L_gain.toFixed(3), L_shift:+L_shift.toFixed(1), bg_blown:bgBlown, bg_dim:bgDim, forehead_used:browDelta<=18, global_sat:+globalSat.toFixed(1), hazy, device:DEVICE, ua:(/Mobi/i.test(navigator.userAgent)?"mobile":"desktop")},
@@ -586,16 +579,23 @@ const T8LINE=Object.fromEntries(T8.map(t=>[t.name,t.line]));
 // ---------- 가상 드레이핑 A/B (이론 요청서 2026-07-20 §2A) ----------
 // 좌우 위치는 라운드마다 교차합니다 — "왼쪽을 더 고르는" 습관이 웜쿨 신호에 섞이지 않게.
 const ROUNDS = {
-  r1:{step:"1/2 단계", hint:"둘 다 마음에 안 들어도 괜찮아요. 얼굴이 더 환해 보이는 쪽이면 돼요",
-      opts:[{v:"gold",name:"골드",color:"#E8B04B"},{v:"silver",name:"실버",color:"#C9CDD2"}]},
+  // Lab 등명도 페어(확정서 2026-07-22)·강사검수 전 초기값 — 목표 R1 L62/C50/h55·h280. 화면 '실버'는 C*3.0 무채색=채도를 잼이라 폐기(§1.3)
+  r1:{step:"1/2 단계", hint:"둘 다 마음에 안 들어도 괜찮아요. 얼굴이 더 환해 보이는 쪽이면 돼요 화면 야간 모드(노랗게 보이는 설정)는 잠깐 꺼주세요",
+      opts:[{v:"orange",name:"주황",color:"#D6804E"},{v:"blue",name:"파랑",color:"#6296ED"}]},
   r2:{step:"2/2 단계", hint:"비슷해 보이면 턱·눈 밑 그늘이 옅은 쪽으로 봐주세요",
       opts:[{v:"white",name:"퓨어 화이트",color:"#FFFFFF"},{v:"ivory",name:"아이보리",color:"#F5EDDC"}]},
   r3:{step:"마지막 한 장", hint:"이번엔 흰색과 검정이에요 — 얼굴이 또렷하게 살아나는 쪽으로",
       opts:[{v:"white",name:"퓨어 화이트",color:"#FFFFFF"},{v:"black",name:"블랙",color:"#111111"}]},
-  // R4 — 뮤트 판별 (이론 v2.7 확정: 동일 색상·명도, 채도만 대비. hex는 강사 검수 전 초기값)
+  // R4 온도 분기(확정서 2026-07-22 §2): 판정된 온도 계열 안에서 채도만 대비. 목표 Lab L60/C45·C15/h55·h275·h17
+  // 정적 opts는 wcSide 판정 전 폴백 — 로즈 교정판(기존 #D14D5E/#B08A8E 교체, 자기 스펙 ΔL*9.6 위반 교정 §2.2)
   r4:{step:"한 장 더", q:"어느 쪽에서 얼굴이 더 또렷하고 생기 있어 보여요?",
-      hint:"같은 로즈인데 선명함만 달라요 — 얼굴이 칙칙해 보이지 않는 쪽으로",
-      opts:[{v:"vivid",name:"선명한 로즈",color:"#D14D5E"},{v:"tonedown",name:"차분한 로즈",color:"#B08A8E"}]}
+      hint:"같은 색인데 선명함만 달라요 — 얼굴이 칙칙해 보이지 않는 쪽으로",
+      opts:[{v:"vivid",name:"선명한 로즈",color:"#DB707C"},{v:"tonedown",name:"차분한 로즈",color:"#AC8889"}]}
+};
+const R4_VARIANTS = {
+  warm:{variant:"orange", opts:[{v:"vivid",name:"선명한 오렌지",color:"#CB7E51"},{v:"tonedown",name:"차분한 오렌지",color:"#A88B7B"}]},
+  cool:{variant:"blue",   opts:[{v:"vivid",name:"선명한 블루",color:"#5793DF"},{v:"tonedown",name:"차분한 블루",color:"#8591AB"}]},
+  both:{variant:"rose",   opts:[{v:"vivid",name:"선명한 로즈",color:"#DB707C"},{v:"tonedown",name:"차분한 로즈",color:"#AC8889"}]}
 };
 function cropFace(cv, lm, W, H, faceW){
   const cx=(P(lm,234,W,H).x+P(lm,454,W,H).x)/2;
@@ -632,32 +632,29 @@ function answerDraping(id, v){
   finalize();
 }
 
-// 웜쿨 최종 = 드레이핑 0.5 + 자가체크 0.3 + 색채 측정 0.2 (요청서 §2C)
+// 웜쿨 최종 = 드레이핑 0.8 + 색채 측정 0.2 (확정서 2026-07-22 §1.5 — 자가체크 0.3은 드레이핑으로 이관)
 // 결측 신호는 가중치를 재정규화해 제외하고, 모름이 많거나 신호가 엇갈리면 경계로 처리합니다.
 function fuseWarmCool(S){
-  const d1 = S.draping.r1==="gold"?1 : S.draping.r1==="silver"?-1 : null;
+  const d1 = S.draping.r1==="orange"?1 : S.draping.r1==="blue"?-1 : null;
   const d2 = S.draping.r2==="ivory"?1 : S.draping.r2==="white"?-1 : null;
   const dv = [d1,d2].filter(v=>v!==null);
   const drape = dv.length ? dv.reduce((a,b)=>a+b,0)/dv.length : null;
-  const self  = S.selfcheck==="gold"?1 : S.selfcheck==="silver"?-1 : null;
   const col   = clamp(S.wc_color, -1, 1);
-  const parts = [[drape,0.5],[self,0.3],[col,0.2]];
+  const parts = [[drape,0.8],[col,0.2]];              // 자가체크(0.3) → 드레이핑으로 이관 (확정서 §1.5)
   let sum=0, wsum=0;
   parts.forEach(([v,w])=>{ if(v===null) return; sum+=v*w; wsum+=w; });
   const value = wsum ? sum/wsum : 0;
-  const unknown_n = parts.filter(p=>p[0]===null).length;         // 가중 기준: 드레이핑 전체가 1신호
-  // 불일치는 개별 응답 단위로 봅니다 — R1·R2가 서로 엇갈린 걸 평균 0으로 삼키면 그 정보가 사라져요
-  const raw = [d1,d2,self,col].filter(v=>v!==null);
+  const unknown_n = parts.filter(p=>p[0]===null).length;
+  const raw = [d1,d2,col].filter(v=>v!==null);        // 불일치는 개별 신호(d1·d2·col) 기준
   const disagree = raw.some(v=>v>0.1) && raw.some(v=>v<-0.1);
-  // 경계폭 ±0.35 (요청서 §1 — hue의 웜쿨 분리력 실증 실패, 과신 방지)
-  const borderline = Math.abs(value)<=0.35 || disagree || unknown_n>=2;
+  // 경계: 합성 근소 OR 신호 불일치 OR 드레이핑 전체 결측(색채 0.2 단독 확정 금지 — 오류대장 001)
+  const borderline = Math.abs(value)<=0.35 || disagree || drape===null;
   return {value:+value.toFixed(2), borderline, disagree, unknown_n,
-          drape: drape===null?null:+drape.toFixed(2), self, col:+col.toFixed(2)};
+          drape: drape===null?null:+drape.toFixed(2), col:+col.toFixed(2)};
 }
 
 function finalize(){
   const S=STATE;
-  S.selfcheck=(document.querySelector('input[name="gs"]:checked')||{}).value || "unknown";
   const WC=fuseWarmCool(S);
   const N=S.N;
   // ---------- [12타입 퍼스널컬러 분류 — 검증 예정, 대표 기준표 v1] ----------
@@ -704,7 +701,11 @@ function finalize(){
   // R4(비비드 vs 톤다운)는 뮤트↔비뮤트 근소 경합일 때만 (이론 v2.7 — csRace와 동일 패턴, 응답은 1순위 승격)
   const isMuteName = a => /뮤트/.test(a);
   const muteRace = pcClose && (isMuteName(scored[0].name) !== isMuteName(scored[1].name));
-  if(muteRace && S.draping.r4===null) return askDraping("r4");
+  if(muteRace && S.draping.r4===null){
+    const r4v = R4_VARIANTS[wcSide] || R4_VARIANTS.both;
+    ROUNDS.r4.opts = r4v.opts; S._r4variant = r4v.variant;
+    return askDraping("r4");
+  }
   if(muteRace && (S.draping.r4==="vivid" || S.draping.r4==="tonedown")){
     const wantMute = S.draping.r4==="tonedown";
     const i = scored.findIndex(t=>isMuteName(t.name)===wantMute);
@@ -735,10 +736,10 @@ function finalize(){
     color:S.color, ratio:S.ratio, line:S.line,
     // 전부 저장 원칙 (요청서 §2D) — 미응답도 "none"이 아니라 원값 그대로 남깁니다
     draping_r1:S.draping.r1, draping_r2:S.draping.r2, draping_r3:S.draping.r3, draping_r4:S.draping.r4,
+    draping_r4_variant: S._r4variant || null,
     mute_display,
-    selfcheck_gs:S.selfcheck,
     warm_cool_fusion:{fused:WC.value, borderline:WC.borderline, disagree:WC.disagree, unknown_n:WC.unknown_n,
-      draping:WC.drape, selfcheck:WC.self, color:WC.col, weights:{draping:0.5, selfcheck:0.3, color:0.2}},
+      draping:WC.drape, color:WC.col, weights:{draping:0.8, color:0.2}},
     // 추구미 8타입 — 라이브러리 좌표 기준 (pipeline step1·2까지 구현 / step3 pairResolver·step4 배제신호는 미구현)
     type8:{primary:w1.name, primary_dist:w1.d, secondary:w2.name, secondary_dist:w2.d, borderline:w8Close,
       coord:{temperature:+temp8.toFixed(2), depth:+depth8.toFixed(2)}, pc_agrees:pcAgrees, resolved_steps:"1-2"},
@@ -954,15 +955,14 @@ function render(o){
     $("dyeBox").innerHTML = `<div style="background:#FFF6EC;border-radius:12px;padding:12px 16px;font-size:13px;line-height:1.7;margin-bottom:12px">💇 <b>염색모 안내</b> — 머리색은 진단에서 제외하고 눈동자 기준으로 판정했어요.<br>${hairMsg}</div>`;
   } else $("dyeBox").innerHTML = "";
   // 드레이핑 결과 요약 (P3 신설 슬롯)
-  const DRAPE_KO={gold:"골드",silver:"실버",ivory:"아이보리",white:"퓨어 화이트",black:"블랙",unknown:"모르겠음"};
+  const DRAPE_KO={orange:"주황",blue:"파랑",ivory:"아이보리",white:"퓨어 화이트",black:"블랙",unknown:"모르겠음"};
   const dParts=[];
   if(o.draping_r1 && o.draping_r1!=="unknown") dParts.push(DRAPE_KO[o.draping_r1]);
   if(o.draping_r2 && o.draping_r2!=="unknown") dParts.push(DRAPE_KO[o.draping_r2]);
   if(o.draping_r3 && o.draping_r3!=="unknown") dParts.push(DRAPE_KO[o.draping_r3]);
   const drapeTxt = dParts.length ? `${dParts.join("·")} 쪽에서 얼굴이 살아 보인다고 하셨어요` : "";
-  const gsTxt = (o.selfcheck_gs && o.selfcheck_gs!=="unknown") ? `${DRAPE_KO[o.selfcheck_gs]} 액세서리가 더 잘 받는 편이에요` : "";
-  $("drapeSummary").innerHTML = (drapeTxt||gsTxt)
-    ? `<div class="small" style="background:#F6F1FF;border-radius:12px;padding:10px 14px;margin-bottom:12px">🎨 <b>드레이핑 응답</b> — ${[drapeTxt,gsTxt].filter(Boolean).join(" / ")}</div>` : "";
+  $("drapeSummary").innerHTML = drapeTxt
+    ? `<div class="small" style="background:#F6F1FF;border-radius:12px;padding:10px 14px;margin-bottom:12px">🎨 <b>드레이핑 응답</b> — ${drapeTxt}</div>` : "";
   // ── P2: 경고 배너 단일화 — 심각도순 1개만, 나머지는 하단 한 줄 요약 ──
   // (게이트 실패는 결과 자체가 없으므로 이 시스템 밖 — gateFail이 전담)
   const warns=[];
