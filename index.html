@@ -3,15 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>추구미즘 photo-engine v0</title>
+<title>추구미즘 · 사진으로 찾는 내 컬러</title>
 <style>
-:root{--ink:#2B2233;--sub:#6E6478;--bg:#FAF7FB;--accent:#B76BA3;--deep:#4A2B5C;--line:#E4DCE9;}
+:root{--ink:#2B2233;--sub:#6E6478;--bg:#FAF7FB;--accent:#B76BA3;--accent-btn:#9C4680;--deep:#4A2B5C;--line:#E4DCE9;}
 *{margin:0;padding:0;box-sizing:border-box;font-family:'Pretendard',-apple-system,'Malgun Gothic',sans-serif;}
 body{background:var(--bg);color:var(--ink);min-height:100vh;padding:20px 16px 60px;}
 .wrap{max-width:520px;margin:0 auto;}
 h1{font-size:22px;} .tag{font-size:11px;color:var(--accent);font-weight:700;letter-spacing:.06em;}
 .card{background:#fff;border-radius:16px;padding:20px;box-shadow:0 4px 16px rgba(58,43,69,.08);margin-top:14px;}
-.btn{display:block;width:100%;background:var(--accent);color:#fff;border:none;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;margin-top:10px;}
+.btn{display:block;width:100%;background:var(--accent-btn);color:#fff;border:none;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;margin-top:10px;}
+.btn:hover{filter:brightness(1.06);}
+.btn:active{filter:brightness(.94);}
+.btn:focus-visible{outline:3px solid var(--accent-btn);outline-offset:2px;}
+/* 전역 포커스 링 통합 (Plan C Task5 · 개별 규칙과 중복되어도 무해) */
+a:focus-visible, button:focus-visible, input:focus-visible, [tabindex]:focus-visible{outline:3px solid var(--accent);outline-offset:2px;}
 .btn.sub{background:var(--line);color:var(--ink);}
 canvas{width:100%;border-radius:12px;background:#eee;}
 .metric{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px;}
@@ -61,21 +66,29 @@ details[open] summary::after{content:" ▴";}
 .drape-panel img{width:78%;aspect-ratio:1;object-fit:cover;border-radius:50%;display:block;}
 .drape-name{font-size:12.5px;color:var(--sub);margin-top:9px;font-weight:700;}
 .drape-step{font-size:11px;color:var(--accent);font-weight:700;letter-spacing:.06em;}
+/* 접근성 선택 카드 (Plan C Task3) */
+.seg-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.seg{flex:1 1 auto;min-height:44px;display:flex;align-items:center;justify-content:center;gap:6px;
+     padding:11px 12px;border:1.5px solid var(--line);border-radius:12px;background:#fff;
+     cursor:pointer;font-size:14px;text-align:center;}
+.seg:has(input:focus-visible){outline:3px solid var(--accent);outline-offset:2px;}
+.seg:has(input:checked){border-color:var(--accent-btn);background:#F6F1FF;font-weight:700;}
+.seg:has(input:checked)::before{content:"✓";color:var(--accent-btn);font-weight:800;}
+.seg input{position:absolute;opacity:0;width:1px;height:1px;} /* 스크린리더·키보드용으로 남기되 시각 숨김 */
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="tag">CHUGUMISM · PHOTO-ENGINE v2.0 (채도 주축·헤어 앵커·드레이핑 R1~R4 · 내부 프로토타입)</div>
-  <h1>사진 진단 모듈</h1>
+<main class="wrap" id="mainContent">
+  <h1>사진 한 장으로, 나에게 어울리는 컬러 찾기</h1>
   <p class="small">모든 분석은 이 기기 안에서만 이뤄져요 — 사진은 어디로도 전송되지 않아요.</p>
   <div id="stepbar">
-    <div class="sb" data-s="1"><b>1</b>가이드</div>
-    <div class="sb" data-s="2"><b>2</b>촬영</div>
-    <div class="sb" data-s="3"><b>3</b>컬러 매칭</div>
-    <div class="sb" data-s="4"><b>4</b>결과</div>
+    <div class="sb" data-s="1" id="sb1"><b>1</b>준비</div>
+    <div class="sb" data-s="2" id="sb2"><b>2</b>사진</div>
+    <div class="sb" data-s="3" id="sb3"><b>3</b>분석</div>
+    <div class="sb" data-s="4" id="sb4"><b>4</b>결과</div>
   </div>
 
-  <div class="step" id="step1">
+  <div class="step" id="step1" tabindex="-1" aria-labelledby="sb1">
   <!-- P1 (REQUEST_dev_ui_p123): 기본 노출 3개, 나머지는 접기 -->
   <div class="card" style="padding:16px 18px">
     <div class="tag">📸 촬영 가이드 (정확도를 크게 좌우해요)</div>
@@ -96,23 +109,27 @@ details[open] summary::after{content:" ▴";}
   </div>
 
   <div class="card">
-    <div style="margin:2px 0 8px;font-size:13.5px"><b>머리 염색을 하셨나요?</b><br>
-  <label style="margin-right:14px"><input type="radio" name="dye" value="n" checked> 자연모(흑모·자연 갈색)</label>
-  <label><input type="radio" name="dye" value="y"> 염색모</label></div>
-    <div style="margin:14px 0 8px;font-size:13.5px"><b>골드/실버 액세서리 중 뭐가 더 잘 받는 편이에요?</b><br>
-  <label style="margin-right:12px"><input type="radio" name="gs" value="gold"> 골드</label>
-  <label style="margin-right:12px"><input type="radio" name="gs" value="silver"> 실버</label>
-  <label><input type="radio" name="gs" value="unknown" checked> 잘 모르겠어요</label></div>
+    <div style="margin:2px 0 8px;font-size:13.5px"><b>머리 염색을 하셨나요?</b></div>
+    <div class="seg-row" role="radiogroup" aria-label="머리 상태">
+      <label class="seg"><input type="radio" name="dye" value="n" checked> 자연모</label>
+      <label class="seg"><input type="radio" name="dye" value="y"> 염색모</label>
+    </div>
+    <div style="margin:14px 0 8px;font-size:13.5px"><b>골드/실버 액세서리 중 뭐가 더 잘 받는 편이에요?</b></div>
+    <div class="seg-row" role="radiogroup" aria-label="골드/실버 중 잘 받는 쪽">
+      <label class="seg"><input type="radio" name="gs" value="gold"> 골드</label>
+      <label class="seg"><input type="radio" name="gs" value="silver"> 실버</label>
+      <label class="seg"><input type="radio" name="gs" value="unknown" checked> 잘 모르겠어요</label>
+    </div>
   </div>
-  <button class="btn stepnav" id="toStep2Btn">다음 — 촬영하러 가기</button>
+  <button class="btn stepnav" id="toStep2Btn">사진 선택으로 이동</button>
   </div><!-- /step1 -->
 
-  <div class="step" id="step2">
+  <div class="step" id="step2" tabindex="-1" aria-labelledby="sb2">
   <div class="card">
     <div class="tag">📷 촬영 · 업로드</div>
 <input type="file" id="file" accept="image/*" style="display:none">
     <button class="btn" id="pickBtn" disabled onclick="document.getElementById('file').click()">구미 깨우는 중...</button>
-    <button class="btn sub" id="liveBtn" disabled>📸 바로 촬영 (카메라)</button>
+    <button class="btn sub" id="liveBtn" disabled>📸 지금 촬영하기</button>
     <div id="status">잠깐만요, 구미가 준비하고 있어요</div>
     <!-- 즉시촬영 모드: 실시간 가이드(밝기·거리·정면·타원 정렬) 후 촬영 -->
     <div id="liveWrap" style="display:none;margin-top:12px">
@@ -129,10 +146,10 @@ details[open] summary::after{content:" ▴";}
     </div>
     <canvas id="cv" style="display:none;margin-top:12px"></canvas>
   </div>
-  <button class="btn sub stepnav" id="backStep1Btn">← 가이드·질문 다시 보기</button>
+  <button class="btn sub stepnav" id="backStep1Btn">← 촬영 준비로 돌아가기</button>
   </div><!-- /step2 -->
 
-  <div class="step" id="step3">
+  <div class="step" id="step3" tabindex="-1" aria-labelledby="sb3">
   <div class="card" id="drapeCard" style="display:none">
     <div class="drape-step" id="drapeStep"></div>
     <div style="font-size:15px;font-weight:700;margin-top:6px" id="drapeQ">어느 쪽에서 얼굴이 더 살아 보여요?</div>
@@ -145,7 +162,7 @@ details[open] summary::after{content:" ▴";}
        신뢰도 박스는 P3 목록에 없지만 헌법 신뢰보호(정직 표기) 대상이라 유지, 드레이핑 요약 뒤에 배치 -->
   </div><!-- /step3 -->
 
-  <div class="step" id="step4">
+  <div class="step" id="step4" tabindex="-1" aria-labelledby="sb4">
   <div class="card" id="resultCard" style="display:none">
     <div id="warnBox"></div>
     <div id="pcBox"></div>
@@ -155,7 +172,7 @@ details[open] summary::after{content:" ▴";}
     <div id="confBox"></div>
     <details id="detailBox" open>
       <summary>자세히 보기</summary>
-      <div class="tag">축 판정 (v0 · 캘리브레이션 전 초기 가중치)</div>
+      <div class="tag">색 방향</div>
       <div class="gauge">
         <div class="lbl"><span>❄️ 쿨</span><span id="wcVal"></span><span>🔥 웜</span></div>
         <div class="bar"><div class="dot" id="wcDot"></div></div>
@@ -167,7 +184,7 @@ details[open] summary::after{content:" ▴";}
     </details>
     <!-- 지표는 기본 화면에 수치+해설 병기로 표시 (대표 2회 확정: 07-11, 07-20 · REQUEST_dev_ux_restore §1)
          이전에 있던 "수치는 내부·검증·B2B 전용" 근거는 이 결정으로 폐기됐습니다 — 되돌리려면 대표 승인 필요 -->
-    <div style="margin-top:16px" class="tag">추출 지표</div>
+    <div style="margin-top:16px" class="tag">세부 측정값</div>
     <div id="metrics"></div>
     <div id="warnRest" class="small"></div>
     <div class="dev-only">
@@ -178,7 +195,7 @@ details[open] summary::after{content:" ▴";}
   </div>
   <button class="btn sub stepnav" id="restartBtn">↺ 처음부터 다시 진단하기</button>
   </div><!-- /step4 -->
-</div>
+</main>
 
 <script type="module">
 import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
@@ -195,7 +212,12 @@ function goStep(n){
     el.classList.toggle("on", k===n);
     el.classList.toggle("done", k<n);
   });
-  window.scrollTo({top:0, behavior:"smooth"});
+  // 단계 전환 스크롤·포커스: 히스토리 조작 없이 새 단계 컨테이너로 시선·포커스만 이동 (Plan C Task5)
+  const stepEl=$("step"+n);
+  if(stepEl){
+    stepEl.scrollIntoView({behavior:"smooth", block:"start"});
+    stepEl.focus({preventScroll:true});
+  }
 }
 let engine=null;
 let STATE=null;   // 측정 결과 보관소 — 드레이핑 응답을 받아 finalize()에서 합칩니다
@@ -217,7 +239,7 @@ async function init(){
       runningMode:"IMAGE", numFaces:1
     });
     $("pickBtn").disabled=false;
-    $("pickBtn").textContent="📷 사진 선택";
+    $("pickBtn").textContent="📷 기기에서 사진 고르기";
     $("liveBtn").disabled=false;
     $("status").textContent="구미가 준비됐어요 — 사진을 선택하거나 바로 촬영해주세요";
   }catch(e){
@@ -636,7 +658,7 @@ function finalize(){
   S.selfcheck=(document.querySelector('input[name="gs"]:checked')||{}).value || "unknown";
   const WC=fuseWarmCool(S);
   const N=S.N;
-  // ---------- [12타입 퍼스널컬러 분류 — 베타 검증용, 대표 기준표 v1] ----------
+  // ---------- [12타입 퍼스널컬러 분류 — 검증 예정, 대표 기준표 v1] ----------
   // 언어값→수치: 높음.85 중상.7 상~중상.75 보통/중.5 중~중상.6 중~중하.4 중하~하.25 낮음/약함.2 약간.3 없음.1 강함.8
   const PC12 = [
     ["봄 라이트","warm",[0.85,0.25,0.15,0.20]], ["봄 클리어","warm",[0.80,0.40,0.10,0.80]], ["봄 스트롱","warm",[0.45,0.65,0.30,0.70]],
@@ -921,7 +943,7 @@ function render(o){
         ${w.borderline?`<div class="sub" style="opacity:.8">${w.secondary}의 결도 살짝 있어요</div>`:""}
       </div>
       <div class="verdict pc">
-        <div class="k">퍼스널컬러 (베타 검증용)</div>
+        <div class="k">퍼스널컬러</div>
         <div class="v">${o.pc12.primary}</div>
         <div class="sub">${wcLabel} · 채도 ${band(fx.saturation)}<br>명도 ${band(fx.brightness)} · ${o.pc12.contrast_anchor.gate>0?`대비 ${band(o.pc12.contrast_anchor.band)}`:"대비 보류(밝은 염색)"}</div>
         ${o.pc12.borderline?`<div class="sub" style="opacity:.8">${o.pc12.secondary}의 결도 살짝 있어요</div>`:""}
