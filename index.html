@@ -134,15 +134,15 @@ details[open] summary::after{content:" ▴";}
     <!-- 즉시촬영 모드: 실시간 가이드(밝기·거리·정면·타원 정렬) 후 촬영 -->
     <div id="liveWrap" style="display:none;margin-top:12px">
       <div style="position:relative;border-radius:12px;overflow:hidden;background:#111">
-        <!-- iOS Safari: video 직접 표시(검게 나옴)도, 캔버스 미러 그리기(scale(-1,1))도 실기기에서 화면 합성 실패.
-             원인=미러 변환의 WebKit 합성 버그. 검증된 경로(liveWork는 미러 없이 그려 인식 정상)를 따라
-             캔버스엔 미러 없이 그리고, 셀카 좌우반전은 정적 캔버스에 CSS transform으로만 건다(비디오 합성과 무관). -->
-        <video id="liveVideo" autoplay playsinline muted style="position:absolute;width:2px;height:2px;opacity:0;pointer-events:none"></video>
-        <canvas id="livePrev" style="width:100%;display:block;transform:scaleX(-1)"></canvas>
+        <!-- iOS 실기기 진단(2026-07-22): 캔버스에 drawImage(비디오)는 픽셀이 실제로 그려지나(luma 변함)
+             iOS Safari가 그 onscreen 캔버스를 화면에 합성하지 않음(같은 캔버스라도 벡터 오버레이는 보임).
+             해법: 비디오를 네이티브로 직접 표시(iOS가 확실히 합성하는 경로). 미러 transform은 검은화면 유발이라 안 검 —
+             미러 없는 프리뷰(분석은 원본 사용, 타원 정렬엔 반전 불필요). livePrev 캔버스는 미사용(숨김). -->
+        <video id="liveVideo" autoplay playsinline muted style="display:block;width:100%"></video>
+        <canvas id="livePrev" style="display:none"></canvas>
         <canvas id="liveOverlay" style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"></canvas>
       </div>
       <div id="liveMsg" class="small" style="text-align:center;margin-top:8px;font-size:13.5px;min-height:1.6em">카메라 준비 중...</div>
-      <div id="liveDbg" style="text-align:center;font-size:12px;color:#B76BA3;font-family:monospace;margin-top:2px">🔧 대기</div><!-- [DEBUG] 원인 확정 후 제거 -->
       <button class="btn" id="shotBtn">📷 촬영</button>
       <button class="btn sub" id="liveCloseBtn">닫기</button>
     </div>
@@ -756,21 +756,8 @@ function finalize(){
 // ---------- 즉시촬영(라이브 카메라) 모드 ----------
 // 실시간 가이드는 업로드 게이트와 같은 임계값을 씁니다 — 찍기 전에 미리 통과시키는 것이 목적.
 let liveStream=null, liveTimer=null, livePrevRaf=null;
-const liveWork=document.createElement("canvas");   // 검사용 저해상 프레임
-let __dbgRaf=0;   // [DEBUG] 라이브 프리뷰 진단 — 원인 확정 후 제거
-function livePreviewLoop(){
-  const v=$("liveVideo"), pc=$("livePrev");
-  __dbgRaf++;
-  let luma=-1;   // -1: videoWidth=0(프레임없음) / -2: getImageData throw / 0~255: 캔버스 중앙 픽셀 밝기
-  if(v.videoWidth){
-    if(pc.width!==v.videoWidth){ pc.width=v.videoWidth; pc.height=v.videoHeight; }
-    const g=pc.getContext("2d");
-    g.drawImage(v,0,0);   // 미러 없이 그린다(인식 경로와 동일 = iOS 실기기 검증됨). 좌우반전은 CSS로.
-    try{ const px=g.getImageData(pc.width>>1, pc.height>>1, 1, 1).data; luma=Math.round(px[0]*0.299+px[1]*0.587+px[2]*0.114); }catch(e){ luma=-2; }
-  }
-  const dbg=$("liveDbg"); if(dbg){ dbg.textContent=`🔧 vW=${v.videoWidth} raf=${__dbgRaf} luma=${luma}`; }
-  livePrevRaf=requestAnimationFrame(livePreviewLoop);
-}
+const liveWork=document.createElement("canvas");   // 검사용 저해상 프레임(인식 전용)
+// 화면 프리뷰는 비디오 직접 표시로 전환 — livePreviewLoop(캔버스 미러)은 iOS 합성 실패로 폐기.
 async function liveStart(){
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
     $("status").innerHTML=`<div class="warn">이 브라우저에선 카메라를 쓸 수 없어요 — 사진 선택으로 진단해주세요</div>`; return;
@@ -789,7 +776,6 @@ async function liveStart(){
   v.addEventListener("loadedmetadata", ()=>{ v.play().catch(()=>{}); }, {once:true});
   $("status").textContent="";
   liveTimer=setInterval(liveCheck, 400);
-  livePreviewLoop();
 }
 function liveStop(){
   if(liveTimer){ clearInterval(liveTimer); liveTimer=null; }
@@ -829,7 +815,7 @@ function liveCheck(){
   $("liveMsg").textContent=msg;
   $("liveMsg").style.color = pass ? "#2C6B3A" : "var(--sub)";
   // 타원 가이드라인
-  const ov=$("liveOverlay"), pv=$("livePrev");
+  const ov=$("liveOverlay"), pv=$("liveVideo");
   ov.width=pv.clientWidth; ov.height=pv.clientHeight;
   const g=ov.getContext("2d");
   g.clearRect(0,0,ov.width,ov.height);
