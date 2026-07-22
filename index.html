@@ -133,7 +133,7 @@ details[open] summary::after{content:" ▴";}
     <div id="status">잠깐만요, 구미가 준비하고 있어요</div>
     <!-- 즉시촬영 모드: 실시간 가이드(밝기·거리·정면·타원 정렬) 후 촬영 -->
     <div id="liveWrap" style="display:none;margin-top:12px">
-      <div style="position:relative;border-radius:12px;overflow:hidden;background:#111">
+      <div style="position:relative;background:#111"><!-- iOS 가설검증: overflow:hidden+border-radius가 비디오 레이어 합성을 깨는지 → 상자 클립 제거(변수 격리). 성공 시 둥근모서리는 비디오에 직접 재적용 -->
         <!-- iOS 실기기 진단(2026-07-22): 캔버스에 drawImage(비디오)는 픽셀이 실제로 그려지나(luma 변함)
              iOS Safari가 그 onscreen 캔버스를 화면에 합성하지 않음(같은 캔버스라도 벡터 오버레이는 보임).
              해법: 비디오를 네이티브로 직접 표시(iOS가 확실히 합성하는 경로). 미러 transform은 검은화면 유발이라 안 검 —
