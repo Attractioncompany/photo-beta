@@ -499,8 +499,9 @@ function analyze(img){
 
   // ---------- [비율] 3분할·부위 비율 ----------
   // 상안부 꼭대기 = 검출된 헤어라인 (10번은 이마 중간 — 대표 지적 2026-07-22, engine v2.1)
-  const hairTop = browDelta>18 ? {y:P(lm,10,W,H).y, detected:false}   // 이마가 가려짐(오염 검사) → 검출 시도 없이 폴백
-                : detectHairline(ctx, lm, W, H, faceW, brow);         // 기준 = 이마 자체 샘플(v2)
+  // 게이트는 '어두운 오염'(앞머리 가림)일 때만 — 밝은 차이(번들거림)는 v3가 볼 기준으로 처리하므로 검출 진행
+  const hairTop = (browDelta>18 && brow.L < cheekAvg.L - 12) ? {y:P(lm,10,W,H).y, detected:false}
+                : detectHairline(ctx, lm, W, H, faceW, brow, cheekAvg);
   const topPt = {x:P(lm,10,W,H).x, y:hairTop.y};
   const faceH = dist(topPt, P(lm,152,W,H));
   const browY = (P(lm,105,W,H).y + P(lm,334,W,H).y)/2;
@@ -641,24 +642,30 @@ const R4_VARIANTS = {
 // MediaPipe 메시 최상단(10번)은 이마 중간에서 끝난다 — 삼정 비율의 기준(헤어라인)에 못 미침 (대표 실측 지적 2026-07-22).
 // 이마 중간에서 위로 세로선 3개를 스캔, '피부색 닮음'이 끊기는 첫 지속 지점(3연속 비피부)을 헤어라인으로 본다.
 // 2/3선 이상에서 못 찾으면 10번 폴백 + hairline_detected:false (없는 확신을 만들지 않는다).
-function detectHairline(ctx, lm, W, H, faceW, ref){
-  // v2 (대표 실기기 제보 2026-07-22): v1은 '피부색과 다르면 경계'라서 이마 번들거림(하이라이트)을
-  // 머리카락으로 오판해 경계를 너무 낮게 잡았다. v2 규칙 —
-  //   경계 = 어두워짐(모발) 또는 색조가 확 바뀜(염색모). 밝아지는 픽셀(반사·흰 배경)은 피부 취급.
-  //   흰 배경으로 이마→배경 직행(모발 없음)이면 경계 미검출 → 폴백(detected:false)이 정상 동작.
-  // ref는 이마 자체 샘플(brow) — 볼 평균보다 이마 스캔의 기준으로 적합.
+function detectHairline(ctx, lm, W, H, faceW, brow, cheek){
+  // v3 (대표 실기기 3장 검증 2026-07-22: 2성공 1실패 — 실패=이마 번들거림 최강 사진):
+  //   v2는 기준색이 이마 샘플 단독이라, 이마가 하이라이트로 오염되면 기준이 비정상적으로 밝아져
+  //   그 위의 정상 피부를 '어둡다=모발'로 오판했다. v3 —
+  //   ① 기준 명도를 볼(번들거림 없는 부위)로 안정화: seed L = min(이마, 볼+6)
+  //   ② 적응형 추적: 피부로 판정된 픽셀은 기준을 그쪽으로 따라가게(EMA) —
+  //      번들거림→정상 피부의 '점진적' 어두워짐은 피부로 추적되고, 모발의 '급격+지속' 하락만 경계
+  //   ③ 밝아지는 픽셀(반사·흰 배경)은 여전히 피부 취급 (v2 유지)
   const top10 = P(lm,10,W,H);
   const xs = [top10.x - faceW*0.10, top10.x, top10.x + faceW*0.10];
   const maxRise = faceW*0.7;
   const ys=[];
   for(const x of xs){
+    // v3.2: 기준은 '고정' — L만 볼로 바닥 고정(하이라이트 오염 차단), 색조는 이마 자체.
+    // 적응형 추적(EMA)은 기각: 잔머리의 점진적 어두워짐을 기준이 따라 내려가 경계를 통과함(가을딥 dev 로그 hairline_detected:false로 확인)
+    const refL = Math.min(brow.L, cheek.L + 6);
+    const refA = brow.a, refB = brow.b;
     let boundary=null, run=0;
     for(let dy=2; dy<maxRise; dy+=2){
       const y = top10.y - dy;
       if(y<2) break;
       const px = sampleLab(ctx, x, y, 2);
-      const darker = px.L < ref.L - 16;
-      const chromaShift = (Math.abs(px.a-ref.a) > 12 || Math.abs(px.b-ref.b) > 14) && px.L <= ref.L + 6;
+      const darker = px.L < refL - 16;
+      const chromaShift = (Math.abs(px.a-refA) > 12 || Math.abs(px.b-refB) > 14) && px.L <= refL + 6;
       if(darker || chromaShift){ run++; if(run>=3){ boundary = y + 6; break; } }
       else run=0;
     }
