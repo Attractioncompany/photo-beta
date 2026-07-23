@@ -162,7 +162,7 @@ details[open] summary::after{content:" ▴";}
     <div id="shotConfirm" style="display:none;margin-top:12px">
       <img id="shotPreview" alt="방금 촬영한 사진" style="width:100%;border-radius:12px;display:block"/><!-- 반전 없음 — 라이브 화면과 같은 방향이어야 "내가 본 그 장면" -->
 
-      <div class="small" style="text-align:center;margin-top:8px">방금 찍힌 사진이에요 — 이대로 볼까요?</div><!-- [문구검수전] -->
+      <div class="small" style="text-align:center;margin-top:8px">방금 찍힌 사진이에요 — 이대로 볼까요?</div>
       <button class="btn" id="shotUseBtn">이 사진으로 분석하기</button>
       <button class="btn sub" id="shotRetryBtn">다시 찍기</button>
     </div>
@@ -209,7 +209,7 @@ details[open] summary::after{content:" ▴";}
     <!-- 지표는 기본 화면에 수치+해설 병기로 표시 (대표 2회 확정: 07-11, 07-20 · REQUEST_dev_ux_restore §1)
          이전에 있던 "수치는 내부·검증·B2B 전용" 근거는 이 결정으로 폐기됐습니다 — 되돌리려면 대표 승인 필요 -->
     <div id="overlayBox" style="display:none">
-      <div class="tag" style="margin-top:16px">내 사진에서 이렇게 쟀어요</div><!-- [문구검수전] -->
+      <div class="tag" style="margin-top:16px">내 사진에서 이렇게 쟀어요</div>
       <img id="overlayImg" alt="측정 오버레이" style="width:100%;max-width:320px;border-radius:12px;display:block;margin:8px auto"/>
     </div>
     <div style="margin-top:16px" class="tag">세부 측정값</div>
@@ -1128,7 +1128,7 @@ function render(o){
       rangeTxt=`내 수치 ${value.toFixed(2)} · ${badgeTxt} 구간(${buckets.find(b=>b[0]===badgeTxt)[1]})`;
     }
     return `<div class="ind-card">
-      <div class="ind-desc">${icon} <b>${label}</b> — ${desc}</div><!-- [문구검수전] -->
+      <div class="ind-desc">${icon} <b>${label}</b> — ${desc}</div>
       <div class="ind-bar"><div class="ind-dot" style="left:${dotPct}%"></div></div>
       <div class="ind-range"><span>${rangeTxt}</span></div>
       <div><span class="ind-badge">${badgeTxt}</span></div>
@@ -1136,11 +1136,11 @@ function render(o){
     </div>`;
   }
   $("indCards").innerHTML = [
-    indicatorCard({icon:"❄️🔥",label:"웜쿨",desc:"피부 색상각(Hue)으로 웜/쿨 방향을 가늠해요",value:fx.warm_cool,isWC:true}),
-    indicatorCard({icon:"☀️",label:"명도",desc:"피부 밝기(L*)로 톤의 밝고 어두움을 가늠해요",value:fx.brightness,isWC:false}),
-    indicatorCard({icon:"🎨",label:"채도",desc:"피부 채도(Chroma)로 색감의 진하고 옅음을 가늠해요",value:fx.saturation,isWC:false}),
-    indicatorCard({icon:"🌫️",label:"탁기",desc:"채도 역산 근사로 톤이 가라앉은 정도를 가늠해요",value:fx.muteness,isWC:false}),
-    indicatorCard({icon:"⚫️",label:"대비",desc:"머리카락↔피부 대비로 또렷함 정도를 가늠해요",value:fx.contrast,isWC:false})
+    indicatorCard({icon:"❄️🔥",label:"웜쿨",desc:"피부에 도는 기운이 따뜻한 쪽인지 차가운 쪽인지 봤어요",value:fx.warm_cool,isWC:true}),
+    indicatorCard({icon:"☀️",label:"명도",desc:"피부 톤이 밝은 편인지 깊은 편인지 봤어요",value:fx.brightness,isWC:false}),
+    indicatorCard({icon:"🎨",label:"채도",desc:"얼굴색이 선명하게 도는지 부드럽게 가라앉는지 봤어요",value:fx.saturation,isWC:false}),
+    indicatorCard({icon:"🌫️",label:"탁기",desc:"톤이 맑게 떠 있는지 차분히 내려앉아 있는지 봤어요",value:fx.muteness,isWC:false}),
+    indicatorCard({icon:"⚫️",label:"대비",desc:"머리색과 피부색 차이가 뚜렷한지 은은한지 봤어요",value:fx.contrast,isWC:false})
   ].join("");
   const w=o.type8;
   const wcLabel = !o.pc12.wc_borderline?(fx.warm_cool>0?"웜":"쿨")
