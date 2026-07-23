@@ -483,6 +483,12 @@ function analyze(img){
   const muteness = clamp((37-chroma)/12, 0, 1);          // 탁기 — cal#3: 영역샘플링 기준 재앵커(c30=0.58 여름뮤트 정합)
   // 명도·대비는 노출 정규화된 L로 계산합니다 (색상 a*/b*는 기존 배경 보정 그대로)
   const skinL = Lc(skin2.L), hairL = Lc(hairCol.L), browL = Lc(browCol.L), irisLm = Lc(irisCol.L);
+  // 방안5 (이론 지시 2026-07-23): 하이라이트 클리핑 게이트 — 포화 피부샘플을 A(명도)에서만 제외.
+  //   conH(대비)·판정 경로의 skinL은 불변(가중 미변경). A만 정직화 → skinL_A는 N.bright 전용.
+  const CLIP_A = 0.15;   // 피부샘플 포화 비율 임계 (잠정 — 하니스 로그로 조정)
+  const _skinPtsA = skinPts.filter(p => (p.clip||0) < CLIP_A);
+  const skinL_A = Lc(_skinPtsA.length ? _skinPtsA.reduce((s,p)=>s+p.L,0)/_skinPtsA.length : skin2.L);
+  const skinClipMax = Math.max(cheekL.clip||0, cheekR.clip||0, brow.clip||0);
   const ita = Math.atan2(skinL-50, b_corr)*180/Math.PI; // ITA 피부톤 각도(밝기 계열)
   // 대비 (전문 판정 표준: 모발·눈썹·눈동자 vs 피부)
   const c_hair = Math.abs(skinL - hairL);
@@ -570,7 +576,8 @@ function analyze(img){
 
   // 5축 정규화 (캘리브레이션 파라미터)
   const N = {
-    bright: clamp((skinL-52)/26, 0, 1),            // 명도: L 52~78 밴드 (노출 정규화된 L 기준)
+    bright: clamp((skinL_A-52)/26, 0, 1),          // 명도(A): 클립 게이트 적용 skinL_A (방안5) — 판정 가중 0이라 판정 불변, 표시·계측만
+    bright_raw: clamp((skinL-52)/26, 0, 1),        // 게이트 전 명도(하니스 비교용)
     sat:    clamp((chroma-12)/25, 0, 1),           // 채도 앵커 15→12 — 임시 보정(확정서 2026-07-22, 계통 쏠림 11/12 교정), 베타 n=60 재산출
     mute:   muteness,                              // 탁기
     con:    clamp((contrast-40)/22, 0, 1)          // 피부↔다크앵커 갭 밴드 40~62 — cal#7(대표 0.5대·지인 0.6대 정합)
@@ -598,7 +605,7 @@ function analyze(img){
     wc_color: warm_cool,                    // 색채 측정 단독 신호 (보조로 강등 — 가중 0.2)
     draping: {r1:null, r2:null, r3:null, r4:null},
     conf_base: confidence,
-    quality:{pass:true, light:+(lum/255).toFixed(2), tilt_deg:+tilt.toFixed(1), light_ref:refType, L_corrected, L_gain:+L_gain.toFixed(3), L_shift:+L_shift.toFixed(1), bg_blown:bgBlown, bg_dim:bgDim, forehead_used:browDelta<=18, hairline_detected:hairTop.detected, global_sat:+globalSat.toFixed(1), hazy, device:DEVICE, ua:(/Mobi/i.test(navigator.userAgent)?"mobile":"desktop")},
+    quality:{pass:true, light:+(lum/255).toFixed(2), tilt_deg:+tilt.toFixed(1), light_ref:refType, L_corrected, L_gain:+L_gain.toFixed(3), L_shift:+L_shift.toFixed(1), bg_blown:bgBlown, bg_dim:bgDim, forehead_used:browDelta<=18, hairline_detected:hairTop.detected, skin_clip:+skinClipMax.toFixed(2), skinL_A:+skinL_A.toFixed(1), skinL_pre:+skinL.toFixed(1), global_sat:+globalSat.toFixed(1), hazy, device:DEVICE, ua:(/Mobi/i.test(navigator.userAgent)?"mobile":"desktop")},
     axes_partial:{soft_deep:+soft_deep.toFixed(2), line_score:+lineScore.toFixed(2)},
     color:{ // ── 5기준 체계: 웜쿨 / 명도 / 채도 / 탁기 / 대비 ──
       hue_angle:+hue.toFixed(1), skin_a:+a_corr.toFixed(1), skin_b:+b_corr.toFixed(1),
@@ -1235,11 +1242,21 @@ function render(o){
   };
   const row=(k,v)=>{const h=HINT[k]?HINT[k](v):""; return `<div class="metric"><span>${L[k]||k}</span><span style="text-align:right"><b>${v}</b>${h?`<br><span style="font-size:11px;color:var(--accent)">→ ${h}</span>`:""}</span></div>`;};
   const sec=(title,obj)=>`<div class="tag" style="margin-top:14px">${title}</div>`+Object.entries(obj).map(([k,v])=>row(k,v)).join("");
-  // 수치표는 모두에게 표시 (REQUEST_dev_ux_restore §1) / ?dev=1은 JSON 등 순수 개발용만
+  // 지표 표시 (대표 확정 2026-07-23, Task4 B): 해석 지표는 노출, 원시 색 측정값만 '자세히 보기'로 접기.
+  //   해석 밴드는 위쪽 5개 지표 카드(five_axis)에도 노출되므로, 여기 표는 핵심 해석행 + 형태만 남기고 원시는 접는다.
+  const COLOR_MAIN=["hue_angle","skin_L","chroma"];         // 해석 지표(웜쿨·명도·채도) — 노출
+  const COLOR_HIDE=["skin_a_raw","skin_b_raw"];             // 순수 로깅 — 표 미표시(JSON엔 유지)
+  const RATIO_INTERNAL=["brow_eye_gap","brow_eye_gap_x","lip_upper","lip_lower","lip_ul_ratio","mouth_open","temple_w"]; // 내부 신호(§5) — 카드 검수 전 비노출
+  const colorMain={}, colorRaw={};
+  Object.entries(o.color).forEach(([k,v])=>{ if(COLOR_HIDE.includes(k))return; (COLOR_MAIN.includes(k)?colorMain:colorRaw)[k]=v; });
+  const ratioShown={}; Object.entries(o.ratio).forEach(([k,v])=>{ if(!RATIO_INTERNAL.includes(k)) ratioShown[k]=v; });
   $("metrics").innerHTML =
-    sec("🎨 색상 (L·a·b 기반)", o.color) +
-    sec("📐 비율 (3분할·부위)", o.ratio) +
-    sec("✏️ 라인 (직선감·곡선감 → 종합 "+o.axes.line_score+" / 1=직선)", o.line);
+    sec("🎨 색상 (L·a·b 기반)", colorMain) +
+    sec("📐 비율 (3분할·부위)", ratioShown) +
+    sec("✏️ 라인 (직선감·곡선감 → 종합 "+o.axes.line_score+" / 1=직선)", o.line) +
+    `<details style="margin-top:12px"><summary>원시 측정값 자세히 보기 (a*·b*·ITA°·보정 전 L·참고 대비)</summary><div style="margin-top:4px">`+
+    Object.entries(colorRaw).map(([k,v])=>row(k,v)).join("")+
+    `</div></details>`;
   if(DEV) $("json").textContent=JSON.stringify(o,null,2);
 }
 </script>
