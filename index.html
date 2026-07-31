@@ -98,7 +98,7 @@ details[open] summary::after{content:" ▴";}
 <body>
 <main class="wrap" id="mainContent">
   <h1>사진 한 장으로, 나에게 어울리는 컬러 찾기</h1>
-  <p class="small">모든 분석은 이 기기 안에서만 이뤄져요 — 사진은 어디로도 전송되지 않아요.</p>
+  <p class="small">사진은 이 기기 안에서만 분석되고, 어디로도 전송·저장되지 않아요. 진단을 개선하려고 얼굴이 아닌 <b>측정 수치만 익명</b>으로 받아요.</p>
   <div id="stepbar">
     <div class="sb" data-s="1" id="sb1"><b>1</b>준비</div>
     <div class="sb" data-s="2" id="sb2"><b>2</b>사진</div>
@@ -121,6 +121,7 @@ details[open] summary::after{content:" ▴";}
       · 카메라는 눈높이에<br>
       · 민낯 권장 (베이스 메이크업은 색 판정을 바꿔요)<br>
       · 안경 벗기 · 무표정 (입꼬리·눈매 측정)<br>
+      · <b>필터·뷰티 모드는 꼭 꺼주세요</b> — 피부색이 실제와 달라져서 판정이 흔들려요 (기본 카메라 앱 권장)<br>
       · <b>밝게 염색한 머리라면</b>: 밝은 창가나 조명을 <b>마주 보고</b>, 얼굴이 화면에 <b>꽉 차게</b> 가까이서 찍으면
         눈동자로 또렷함을 잴 수 있어요 (☀️ 태양은 절대 직접 보지 마세요)</div>
     </details>
@@ -215,10 +216,17 @@ details[open] summary::after{content:" ▴";}
     <div style="margin-top:16px" class="tag">세부 측정값</div>
     <div id="metrics"></div>
     <div id="warnRest" class="small"></div>
+    <p class="small" style="margin-top:14px;opacity:.85">측정 수치는 익명으로 진단 개선에만 쓰여요 — 얼굴 사진은 저장되지 않아요.</p>
     <div class="dev-only">
       <div class="tag" style="margin-top:16px">출력 JSON (백엔드 계약 스펙)</div>
       <pre id="json"></pre>
       <button class="btn sub" onclick="navigator.clipboard.writeText(document.getElementById('json').textContent)">JSON 복사</button>
+    </div>
+    <!-- 8타입 얼굴 시그널 해설 카드 — DEV 게이트 (배포 금지, 측정 판별력 M1/M2 검증 대기)
+         문안: theory/이론초안_정면측정보완_8타입해설_2026-07-23.md §2 확정본
+             + theory/마케팅카피최종_8타입해설_2026-07-23.md A·B 반영. 창작 없음, 원문 그대로. -->
+    <div class="dev-only" id="sigCardsWrap">
+      <div id="sigCards"></div>
     </div>
   </div>
   <button class="btn sub stepnav" id="restartBtn">↺ 처음부터 다시 진단하기</button>
@@ -255,6 +263,36 @@ let STATE=null;   // 측정 결과 보관소 — 드레이핑 응답을 받아 f
 // 과거의 "수치는 내부·검증·B2B 전용" 근거는 폐기됨 — 지표를 다시 숨기려면 대표 승인 필요.
 const DEV = new URLSearchParams(location.search).get("dev")==="1";
 if(DEV) document.body.classList.add("dev");
+// 성별 전달 경로 (이론 이목구비앵커 §3, 2026-07-30) — index GENDER를 ?gender=f/m 로 수신. 여성한정 앵커(eye_len F1)·성별밴드(U30) 검증용.
+// ⚠ photo_measurements payload에는 넣지 않음(성별은 app_users.gender 조인, backend 결정 2026-07-30). 현재는 경로만 확보, 실사용은 통합/eye_len 카드 구현 시.
+const GENDER_PM = new URLSearchParams(location.search).get("gender")||null;
+// 통합 흐름 (2026-07-31 대표 확정: 촬영 → 설문 순서): ?flow=full 이면 측정 결과를 저장하고 설문(2단계)으로 안내
+const FLOW_FULL = new URLSearchParams(location.search).get("flow")==="full";
+
+// ── 형태 측정 익명 전송 (backend REQUEST_형태측정전송스펙_0730 · 대표 승인 2026-07-30) ──
+// ⚠ 전송 대상은 파생 스칼라 23필드 + quality(jsonb)뿐. 얼굴·랜드마크 좌표·드레이핑·오버레이·크롭은 절대 전송 금지.
+// rgb2lab(판정블록) 앞에 둬서 drift-hash 무영향. 배포는 photo 재현성 T2 이후(현재 dev 테스트분만).
+const PM_SB_URL="https://qngylynylgqlbidvtbci.supabase.co";
+const PM_SB_KEY="sb_publishable_bGVbZ31O7OX_rnkLVb0i5Q_SDa8JEri";
+let PM_UID=null; try{ PM_UID=localStorage.getItem("czm_uid"); if(!PM_UID){ PM_UID=(crypto.randomUUID?crypto.randomUUID():'u'+Date.now()+Math.random().toString(36).slice(2)); localStorage.setItem("czm_uid",PM_UID);} }catch(e){ PM_UID='u'+Date.now(); }
+async function sendMeasurement(out){
+  try{
+    const c=out.color||{}, r=out.ratio||{}, l=out.line||{}, a=out.axes||{};
+    const payload={
+      user_id:PM_UID, app_version:out.engine_ver||"photo", src:new URLSearchParams(location.search).get("src")||null,
+      skinL:c.skin_L, hue:c.hue_angle, chroma:c.chroma, contrast:c.contrast_overall,
+      jaw_angular_deg:l.jaw_angular_deg, chin_angle_deg:l.chin_angle_deg, brow_arch_deg:l.brow_arch_deg,
+      eye_angle:l.eye_angle, eye_open:l.eye_open, mouth_corner:l.mouth_corner,
+      face_HW:r.face_HW, lip_upper:r.lip_upper, lip_lower:r.lip_lower, lip_ul_ratio:r.lip_ul_ratio,
+      mouth_w:r.mouth_w, brow_eye_gap:r.brow_eye_gap, brow_eye_gap_x:r.brow_eye_gap_x,
+      temple_w:r.temple_w, nose_w:r.nose_w, jaw_w:r.jaw_w,
+      eye_len:r.eye_len, interocular:r.interocular,
+      line_score:a.line_score, soft_deep:a.soft_deep, warm_cool:a.warm_cool,
+      quality:out.quality||{}
+    };
+    await fetch(`${PM_SB_URL}/rest/v1/photo_measurements`,{method:"POST",headers:{"Content-Type":"application/json","apikey":PM_SB_KEY,"Authorization":`Bearer ${PM_SB_KEY}`},body:JSON.stringify(payload)});
+  }catch(e){}
+}
 
 async function init(){
   $("pickBtn").disabled=true;
@@ -283,6 +321,8 @@ document.querySelector('#stepbar .sb[data-s="1"]').classList.add("on");
 $("toStep2Btn").addEventListener("click", ()=>goStep(2));
 $("backStep1Btn").addEventListener("click", ()=>goStep(1));
 $("restartBtn").addEventListener("click", ()=>location.reload());
+if(FLOW_FULL) document.getElementById("stepbar").insertAdjacentHTML("beforebegin",
+  `<div class="small" style="text-align:center;margin-top:10px;color:var(--accent);font-weight:700">통합 진단 1/2 — 촬영·측정을 마치면 설문으로 이어져요</div>`);
 init();
 
 let DEVICE="unknown";
@@ -558,7 +598,7 @@ function analyze(img){
   const bIn=P(lm,107,W,H), bPk=P(lm,105,W,H), bOut=P(lm,70,W,H);
   const bv1=Math.atan2(bPk.y-bIn.y,bPk.x-bIn.x), bv2=Math.atan2(bOut.y-bPk.y,bOut.x-bPk.x);
   let browArch=Math.abs(bv2-bv1)*57.3; if(browArch>180)browArch=360-browArch;
-  const eyeAngle = ((eyeL.y-eyeLi.y)+(eyeR.y-eyeRi.y))/2 / faceW * 100;
+  const eyeAngle = -(((eyeL.y-eyeLi.y)+(eyeR.y-eyeRi.y))/2) / faceW * 100;  // N8(이론확정 2026-07-30): 부호 반전 — 바깥(33/263)−안쪽(133/362)이라 올라간 눈매가 음수로 나오던 것 시정(mouth_corner와 동일 패턴). +상향
   const eyeOpen=eyeOpen0;
   // 종합 직선감 스코어 (0=곡선 1=직선) — v0 러프, 캘리브레이션 대상
   const lineScore = clamp( clamp((jawAngular-7)/12,0,1)*0.45 + clamp((chinAngle-115)/50,0,1)*0.25 + clamp((25-browArch)/20,0,1)*0.30, 0, 1);
@@ -567,7 +607,7 @@ function analyze(img){
   const HUE_NEUTRAL = 57;   // cal#4: 배경보정 파이프라인 기준, 쿨 2표본(53.8/34.8) 정합 — 웜 표본으로 상한 검증 필요
   const warm_cool = clamp((hue - HUE_NEUTRAL)/8, -1, 1);
   const contrastN = clamp((contrast-18)/30, 0, 1);
-  const soft_deep = clamp(contrastN*0.5 + lineScore*0.5, 0, 1)*2-1;
+  const soft_deep = clamp(lineScore, 0, 1)*2-1;   // N12(이론확정 2026-07-30): 대비성분 제거 — contrastN 전원포화로 축이 상수화(r=-0.14)되던 것 시정. 밴드·가중 재보정은 데이터 후(이론팀 봉인)
   const hazy = globalSat < 30 && chroma < 24;   // 전역·피부 채도 동시 저하 = 뿌연 사진 의심
   // L 보정 미적용(-0.08)은 요청서 §3 — 배경 레퍼런스가 없어 노출 정규화를 못 한 경우
   const confidence = clamp((hazy?0.7:0.9) - tilt/40 - (Math.abs(lum-140)/300) - (refWarn?0.15:0) - (L_corrected?0:0.08) - (browDelta>18?0.05:0), 0.3, 0.95);
@@ -860,11 +900,12 @@ function finalize(){
   const pc1=scored[0], pc2=scored[1];
 
   // 탁기 해설용 표시 전용 값 (v2.6 — 판정 거리식 절대 미사용)
+  // strength(피부 저채도 스칼라)는 v2.8-C로 폐기 — "뮤트=피부 저채도"는 팔레트→피부 범주 오류로 판명 (label 분기 단독)
   const mute_display =
-    (S.draping.r4==="tonedown") ? {label:"mute_confirmed",  strength:+N.mute.toFixed(2), basis:"r4"}
-  : (S.draping.r4==="vivid")    ? {label:"clear_confirmed", strength:+N.mute.toFixed(2), basis:"r4"}
-  : isMuteName(pc1.name)        ? {label:"mute_tentative",  strength:+N.mute.toFixed(2), basis:"type"}
-  :                               {label:"none",            strength:+N.mute.toFixed(2), basis:"none"};
+    (S.draping.r4==="tonedown") ? {label:"mute_confirmed",  basis:"r4"}
+  : (S.draping.r4==="vivid")    ? {label:"clear_confirmed", basis:"r4"}
+  : isMuteName(pc1.name)        ? {label:"mute_tentative",  basis:"type"}
+  :                               {label:"none",            basis:"none"};
 
   // ---------- [추구미 8타입 판정] ----------
   const temp8 = -WC.value, depth8 = S.axes_partial.soft_deep;   // ← 부호 반전 지점 (T8 주석 참고)
@@ -897,6 +938,7 @@ function finalize(){
   };
   render(out);
   $("status").textContent="✅ 분석 완료";
+  sendMeasurement(out);   // 형태 스칼라 23필드+quality 익명 전송 (얼굴/좌표/드레이핑 제외). 해시블록 밖이라 판정부 무영향.
 }
 
 // ---------- 즉시촬영(라이브 카메라) 모드 ----------
@@ -1052,7 +1094,8 @@ function render(o){
   const wcDir=o.axes.warm_cool>0?"웜":"쿨";
   $("wcVal").textContent = !o.pc12.wc_borderline ? wcDir+" 성향"
     : Math.abs(o.axes.warm_cool)<=0.35 ? "경계(미결정)" : wcDir+" 쪽 (확정 전)";
-  $("sdVal").textContent=o.axes.soft_deep>0.15?"딥 성향":o.axes.soft_deep<-0.15?"소프트 성향":"중간";
+  // N13(이론확정 2026-07-30): soft_deep 단정 표기 금지 — 밴드 미재보정·저신뢰(N12) 상태라 '성향' 단정 대신 방향+참고 화법(문구 최종은 마케팅 검수)
+  $("sdVal").textContent=o.axes.soft_deep>0.15?"딥 쪽 (참고)":o.axes.soft_deep<-0.15?"소프트 쪽 (참고)":"중간";
   const band=v=>v>=0.78?"높음":v>=0.62?"중상":v>=0.42?"중":v>=0.28?"중하":"낮음";
   // ---- 구미의 관찰: 축별 문장 사전 + 결정적 단서 ----
   const OBS={
@@ -1258,6 +1301,146 @@ function render(o){
     Object.entries(colorRaw).map(([k,v])=>row(k,v)).join("")+
     `</div></details>`;
   if(DEV) $("json").textContent=JSON.stringify(o,null,2);
+  // 통합 흐름: 측정 요약을 저장하고 2단계(설문)로 — 같은 오리진(survey-beta)에서 index.html이 읽는다
+  if(FLOW_FULL && !document.getElementById("toSurveyBtn")){
+    try{ localStorage.setItem("chugu_photo_result", JSON.stringify({v:1, ts:Date.now(), engine_ver:o.engine_ver,
+      pc:{primary:o.pc12.primary, secondary:o.pc12.secondary, borderline:o.pc12.borderline},
+      warm_cool:{v:o.axes.warm_cool, borderline:o.pc12.wc_borderline},
+      mute:o.mute_display?o.mute_display.label:null, confidence:o.axes.confidence})); }catch(e){}
+    $("restartBtn").insertAdjacentHTML("beforebegin",
+      `<a class="btn stepnav" id="toSurveyBtn" style="display:block;text-align:center;text-decoration:none" href="index.html?flow=full">다음 단계 — 추구미 설문 (2/2) →</a>`);
+  }
+  if(DEV) $("sigCards").innerHTML = signalCards(o);
+}
+
+// ── 8타입 얼굴 시그널 해설 카드 (DEV 전용 — 선반영, 미배포) ──────────────────
+// 성격: 이론팀 확정 "이론초안_정면측정보완_8타입해설_2026-07-23.md §2"(해설 문안 확정본)
+//   + "마케팅카피최종_8타입해설_2026-07-23.md" A(확정교체 3건)·B(구조변주 3장) 반영 완료본을
+//   그대로 옮긴 것. 문안 창작·요약 없음(각 문구 출처는 signal-cards-report.md 참조).
+// 게이트: 배포 금지. render()에서 if(DEV) 통과 시에만 호출 + 컨테이너도 CSS .dev-only 이중 게이트.
+//   측정/판정식은 절대 변경하지 않음 — 이미 계산된 o.ratio / o.line 값을 밴드로 나눠 문안만 고른다.
+// 밴드 경계 원칙(브리프 지시):
+//   - eye_angle·mouth_corner·jaw_angular_deg·chin_angle_deg·brow_arch_deg·eye_open 은
+//     render() 위쪽 HINT 상수의 기존 부트스트랩 임계를 그대로 재사용(신규 기준 아님).
+//   - face_HW·mouth_w·lip_thick·brow_eye_gap 은 HINT에 없어 임시 3(2)분할 placeholder를 썼다.
+//     이 값들은 실측 분포가 없는 [밴드 잠정 — 데이터 대기] 상태이며, 베타 백분위 확정 전까지
+//     방향(넉넉/좁음 등) 판별용일 뿐 절대적 기준이 아니다.
+//   - 확정 해설 문안이 없는 밴드(E7 눈썹 아치각의 '중간' 구간)는 텍스트를 지어내는 대신 카드 자체를 숨긴다.
+function signalCards(o){
+  const R=o.ratio, LN=o.line;
+  const NOTICE = "추구미로 가려면 지금의 나부터. 여기 나오는 건 점수가 아니라, 그 출발점이에요.";
+  const cards=[]; // {icon,title,bands:[{name,on}],text,hypo}
+  // 발화 게이트 (이론확정 2026-07-30 이목구비앵커 §2) — 판정 로직 무변경, 카드 발화만 잠금(로직·카피 보존)
+  // E1·M1·M2 = G2: photo_measurements 필드별 n≥100서 임시경계가 P10~P90 안임을 확인 후 이론팀 지시로 true
+  // E3·E4·E5·E7 = 발화 보류(해제조건 정의서 §3): E3 밴드미정(HW_CUT placeholder)·E4 jaw폭 압축(전원 곡선)·E7 척도의심(전원 아치)·E5 표정교란
+  // E2 = N6 보류(이미 카드 미생성). 정식 발화는 게이트①(강사 형태라벨 n≥60·D31) 통과 후.
+  const CARD_GATE={E1:false,M1:false,M2:false,E3:false,E4:false,E5:false,E7:false};
+
+  // M1. 눈-눈썹 거리 (신규 측정 brow_eye_gap) — eye_open>0.22 게이트 미통과 시 null → 카드 숨김(§5 체크리스트)
+  if(CARD_GATE.M1 && R.brow_eye_gap!=null){
+    const GAP_CUT = 0.035; // [밴드 잠정 — 데이터 대기] 실측 분포 없음, 베타 백분위로 재산정 예정(이론초안 §5)
+    const wide = R.brow_eye_gap >= GAP_CUT;
+    cards.push({
+      icon:"👁️", title:"눈-눈썹 거리",
+      bands:[{name:"좁음",on:!wide},{name:"넉넉",on:wide}],
+      text: wide
+        ? "눈과 눈썹 사이에 여백이 넉넉해요. 이 한 뼘이 인상을 한 톤 여리게 풀어주죠. 로맨틱한 매력이 얼굴에 이미 얹혀 있는 거예요."
+        : "눈썹이 눈 가까이에 자리해서 눈매에 힘이 실려 보여요. 시선이 또렷하게 꽂히는 얼굴이라, 깊고 강한 매력을 낼 때 그 힘이 그대로 살아나요.",
+      hypo: !wide // 좁음 방향만 [가설] — 이론초안 §2 M1
+    });
+  }
+
+  // M2. 입술 상하 볼륨 (lip_upper+lip_lower 도톰↔얇음 × mouth_w 소↔대 조합) — mouth_open 게이트 시 카드 숨김(§5 체크리스트)
+  if(CARD_GATE.M2 && !R.mouth_open){
+    const THICK_CUT = 0.065, WIDE_CUT = 0.40; // [밴드 잠정 — 데이터 대기] N5(2026-07-30): 주지표 lip_upper+lip_lower 합 기준(실제 입술 살), 실측 분포 없음
+    const thick = (R.lip_upper + R.lip_lower) >= THICK_CUT;   // lip_thick(13·14=입벌림 틈)은 mouth_open 게이트 전용, 판정 미사용
+    const wideMouth = R.mouth_w >= WIDE_CUT;
+    const bandName = !thick ? "얇음~보통" : (wideMouth ? "도톰·대" : "도톰·소");
+    cards.push({
+      icon:"👄", title:"입술 상하 볼륨",
+      bands:[{name:"도톰·소",on:bandName==="도톰·소"},{name:"도톰·대",on:bandName==="도톰·대"},{name:"얇음~보통",on:bandName==="얇음~보통"}],
+      text: bandName==="도톰·소" ? "입술이 도톰하고 봉긋한 편이에요. 말하지 않아도 부드럽고 화사한 기운이 도는 입매라, 로맨틱 매력이 가장 먼저 피어나는 자리예요."
+          : bandName==="도톰·대" ? "입술 볼륨이 넉넉하고 입매의 존재감이 커요. 시선을 붙잡는 힘이 있는 입이라, 깊고 화려한 매력이 잘 실려요."
+          : "입매가 야무지게 딱 떨어지는 라인이에요. 군더더기 없이 정돈된 입이라, 시크하고 도시적인 매력에 힘을 실어줘요.",
+      hypo:false
+    });
+  }
+
+  // E1. 눈꼬리 각도 — HINT 임계 그대로(±0.5)
+  if(CARD_GATE.E1){
+    const v=LN.eye_angle;
+    const b = v>0.5?"상향":v<-0.5?"하향":"수평";
+    cards.push({icon:"👁️‍🗨️", title:"눈꼬리 각도",
+      bands:[{name:"하향",on:b==="하향"},{name:"수평",on:b==="수평"},{name:"상향",on:b==="상향"}],
+      text: b==="상향" ? "눈꼬리가 살짝 올라가 있어요. 시선을 또렷하게 끌어올리는 눈이라, 생기 있는 에너지부터 시크한 카리스마까지 힘 있는 매력이 자연스럽게 실려요."
+          : b==="수평" ? "눈꼬리가 수평에 가까워요. 치우침 없이 맑고 단정하게 읽히는 눈이라, 청량한 매력도 클래식한 매력도 무리 없이 소화하는 위치예요."
+          : "눈꼬리가 부드럽게 내려와 있어요. 보는 사람 마음이 먼저 풀어지는 순한 눈매라, 로맨틱하고 우아한 매력의 출발점이 이미 잡혀 있어요.",
+      hypo:false});
+  }
+
+  // E2. 눈매 종횡비 — N6(이론확정 2026-07-30): 밴드 철회. 0.22는 대비측정 신뢰도 게이트값이라 판별 경계로 전용 금지 →
+  //     판별 밴드 미정 상태로 카드 보류(데이터로 경계 산정 후 복원). eye_open 0.22는 irisOK/brow_eye_gap 게이트로만 유지.
+
+  // E3. 얼굴 비례 — face_HW, HINT 없음 [밴드 잠정 — 데이터 대기]
+  if(CARD_GATE.E3){
+    const HW_CUT = 1.35;
+    const long_ = R.face_HW >= HW_CUT;
+    cards.push({icon:"📐", title:"얼굴 비례",
+      bands:[{name:"짧고 둥근 비례",on:!long_},{name:"세로 여유 비례",on:long_}],
+      text: long_
+        ? "얼굴 비례에 세로 여유가 있는 편이에요. 어른의 안정감이 실리는 비례라, 우아하고 클래식한 매력이 살아날 때 격이 산다는 말을 듣기 쉬워요."
+        : "나이보다 어려 보인다는 말, 자주 들을 얼굴이에요. 비례가 아담하고 둥근 쪽이거든요. 통통 튀는 에너지도, 화사한 러블리 매력도 이미 반쯤 완성돼 있어요.",
+      hypo:false});
+  }
+
+  // E4. 턱선·턱끝 — jaw_angular_deg(7/19)·chin_angle_deg(115/165) HINT 임계 그대로, 조합은 이론초안 §2 판독 규칙
+  if(CARD_GATE.E4){
+    const jaw=LN.jaw_angular_deg, chin=LN.chin_angle_deg;
+    const b = jaw>=19 ? "각" : (jaw>=7 && chin<115 ? "매끈한 직선" : "곡선");  // N7(이론확정 2026-07-30): '매끈한 직선'에 꺾임각 하한(7≤jaw) 복원 — 턱 아주 둥근 사람(jaw<7)이 세련으로 새던 것 시정(이론초안 §2 "꺾임각 중간+턱끝V")
+    cards.push({icon:"🫤", title:"턱선·턱끝",
+      bands:[{name:"곡선",on:b==="곡선"},{name:"매끈한 직선",on:b==="매끈한 직선"},{name:"각",on:b==="각"}],
+      text: b==="각" ? "턱선에 각이 또렷해요. 사진에서 얼굴이 흐트러지지 않고 딱 잡히죠. 강하고 시크한 매력을 낼 때, 이 턱선이 주인공이 돼요."
+          : b==="매끈한 직선" ? "턱선이 각지진 않은데 샤프하게 떨어져요. 군더더기 없는 라인이라, 도시적이고 세련된 매력과 결이 정확히 맞아요."
+          : "턱선이 각 없이 둥글게 흘러요. 인상 전체를 순하게 감싸는 라인이라, 부드러운 매력이 기본값으로 깔려 있는 얼굴이에요.",
+      hypo:false});
+  }
+
+  // E5. 입꼬리 각도 — HINT 임계 그대로(±0.5)
+  if(CARD_GATE.E5){
+    const v=LN.mouth_corner;
+    const b = v>0.5?"상향":v<-0.5?"하향":"수평";
+    cards.push({icon:"🙂", title:"입꼬리 각도",
+      bands:[{name:"하향",on:b==="하향"},{name:"수평",on:b==="수평"},{name:"상향",on:b==="상향"}],
+      text: b==="상향" ? "입꼬리가 살짝 올라간, 잘 웃는 상이에요. 가만히 있어도 밝은 기운이 도는 입매라, 생기 있는 매력의 절반은 이미 갖고 시작해요."
+          : b==="수평" ? "입꼬리가 수평으로 단정하게 자리해요. 감정을 앞세우지 않는 입매라, 신뢰감 있는 클래식한 매력이나 절제된 매력에 그대로 힘이 돼요."
+          : "입꼬리가 차분하게 내려앉은 편이에요. 쉽게 들뜨지 않는 분위기가 도는 입매라, 시크하고 무심한 듯한 매력을 낼 때 오히려 중심을 잡아줘요.",
+      hypo:false});
+  }
+
+  // E7. 눈썹 아치각 — HINT 임계(5/25) 재사용. 중간 구간은 확정 문안이 없어 카드 자체를 숨김(창작 금지)
+  if(CARD_GATE.E7){
+    const v=LN.brow_arch_deg;
+    if(v>=25 || v<5){
+      const arch = v>=25;
+      cards.push({icon:"⌒", title:"눈썹 아치각",
+        bands:[{name:"일자형(직선)",on:!arch},{name:"아치형(곡선)",on:arch}],
+        text: arch
+          ? "눈썹은 타고난 모양에 평소 다듬어 온 손길이 더해진 부분이에요. 지금은 부드러운 아치를 그리고 있는데, 얼굴의 선을 한층 둥글게 이어주는 곡선이라 여성스럽고 화사한 매력과 자연스럽게 맞물려요."
+          : "눈썹은 타고난 결에 평소 손질이 얹힌 부분이에요. 지금은 일자로 곧게 자리해서 인상에 심지를 세워주는 선이라, 단정한 매력부터 카리스마까지 뼈대 역할을 해요.",
+        hypo:false});
+    }
+  }
+
+  const cardHtml = cards.map(c=>`
+    <div class="ind-card">
+      <div class="ind-desc">${c.icon} <b>${c.title}</b>${c.hypo?' <span style="font-size:10px;color:#B76BA3;border:1px solid #B76BA3;border-radius:8px;padding:1px 6px;margin-left:4px">가설 · 검증 전</span>':''}</div>
+      <div style="font-size:13.5px;line-height:1.75;color:var(--ink,#3A2B45);margin:6px 0 10px">${c.text}</div>
+      <div class="ind-bands">${c.bands.map(b=>`<span class="${b.on?'on':''}">${b.name}</span>`).join('')}</div>
+    </div>`).join('');
+
+  return `<div class="tag" style="margin-top:16px">🔎 얼굴 시그널 (dev 미리보기 — 배포 전)</div>
+    <div style="font-size:12.5px;line-height:1.7;color:var(--sub);background:#F6F1FF;border-radius:12px;padding:10px 14px;margin:8px 0 4px">${NOTICE}</div>
+    ${cardHtml}`;
 }
 </script>
 </body>
