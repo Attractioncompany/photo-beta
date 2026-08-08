@@ -281,6 +281,10 @@ function goStep(n){
 }
 let engine=null;
 let STATE=null;   // 측정 결과 보관소 — 드레이핑 응답을 받아 finalize()에서 합칩니다
+// 검증 훅 — 배치로 Sample을 돌려 전 필드를 얻기 위한 노출. 판정 블록(rgb2lab~engine_ver) **밖**이라
+// drift-hash 불변이다. batch-verify는 색·명도 사본이라 비율 17종이 없어서, 이 훅 없이는
+// 에셋 스코어링 엔진을 실사진으로 검증할 방법이 없다(측정값 저장분도 전부 batch 출력이었다).
+window.__pm={ analyze:img=>analyze(img), get state(){ return STATE; } };
 
 // 개발/검수 모드: 주소 뒤에 ?dev=1 — 출력 JSON·랜드마크 오버레이·엔진 버전 표기 등 순수 개발용만.
 // 지표(수치+해설)는 기본 화면에 항상 표시한다 (대표 2회 확정 07-11·07-20, REQUEST_dev_ux_restore §1).
@@ -290,6 +294,36 @@ if(DEV) document.body.classList.add("dev");
 // 성별 전달 경로 (이론 이목구비앵커 §3, 2026-07-30) — index GENDER를 ?gender=f/m 로 수신. 여성한정 앵커(eye_len F1)·성별밴드(U30) 검증용.
 // ⚠ photo_measurements payload에는 넣지 않음(성별은 app_users.gender 조인, backend 결정 2026-07-30). 현재는 경로만 확보, 실사용은 통합/eye_len 카드 구현 시.
 const GENDER_PM = new URLSearchParams(location.search).get("gender")||null;
+// 가설 섀도 모드 (이론확정 2026-07-31 이론확정_가설섀도모드_v1) — CARD_GATE(노출)와 무관하게 밴드 판독만 상시 기록.
+// ⚠ 경계 단일소스 (이론 §7 자가검산 제안 채택 2026-07-31): shadowBands·signalCards 카드가 이 상수를 공유 → 어긋남 원천 차단.
+//    경계 변경 시 여기 한 곳만 고치고 hypo_ver 승급(정본 §4). 판정·노출 불변.
+const SB={eyeAng:0.5, gap:0.035, lipThick:0.065, mouthWide:0.40, jawHi:19, jawLo:7, chin:115, archHi:25, archLo:5};
+function shadowBands(R,LN){
+  const ang=v=>v>SB.eyeAng?"상향":v<-SB.eyeAng?"하향":"수평";
+  return {
+    hypo_ver:"hs1",
+    E1: ang(LN.eye_angle),
+    M1: R.brow_eye_gap==null ? "gated" : (R.brow_eye_gap>=SB.gap?"넉넉":"좁음"), // gated=eye_open≤0.22(경계미달과 구분)
+    M2: R.mouth_open ? "gated" : ((R.lip_upper+R.lip_lower)>=SB.lipThick ? (R.mouth_w>=SB.mouthWide?"도톰·대":"도톰·소") : "얇음~보통"),
+    E4: LN.jaw_angular_deg>=SB.jawHi ? "각" : (LN.jaw_angular_deg>=SB.jawLo && LN.chin_angle_deg<SB.chin ? "매끈한직선" : "곡선"), // N7 규칙
+    E5: ang(LN.mouth_corner),
+    E7: LN.brow_arch_deg>=SB.archHi ? "아치" : (LN.brow_arch_deg<SB.archLo ? "일자" : "중간") // 중간=카드 숨김이나 밴드는 기록
+  };
+}
+// 턱선 곡선 피팅 잔차 (외부제안 채택·2026-07-31, 판정 미사용·로깅 전용) — 다항 최소제곱 MSE. 입력 좌표는 faceW=1 정규화 필수(스케일 의존).
+function _gaussSolve(A,b){ const n=A.length,M=A.map((r,i)=>[...r,b[i]]);
+  for(let c=0;c<n;c++){ let p=c; for(let r=c+1;r<n;r++) if(Math.abs(M[r][c])>Math.abs(M[p][c])) p=r;
+    if(Math.abs(M[p][c])<1e-12) return null; [M[c],M[p]]=[M[p],M[c]];
+    const piv=M[c][c]; for(let k=c;k<=n;k++) M[c][k]/=piv;
+    for(let r=0;r<n;r++){ if(r===c) continue; const f=M[r][c]; for(let k=c;k<=n;k++) M[r][k]-=f*M[c][k]; } }
+  return M.map(r=>r[n]); }
+function polyfitMSE(xs,ys,deg){ const n=xs.length,m=deg+1; if(n<m) return {mse:null,coef:null};
+  const ATA=Array.from({length:m},()=>new Array(m).fill(0)), ATy=new Array(m).fill(0);
+  for(let i=0;i<n;i++){ const pw=[]; let p=1; for(let j=0;j<m;j++){ pw.push(p); p*=xs[i]; }
+    for(let r=0;r<m;r++){ for(let c=0;c<m;c++) ATA[r][c]+=pw[r]*pw[c]; ATy[r]+=pw[r]*ys[i]; } }
+  const coef=_gaussSolve(ATA,ATy); if(!coef) return {mse:null,coef:null};
+  let se=0; for(let i=0;i<n;i++){ let f=0,p=1; for(let j=0;j<m;j++){ f+=coef[j]*p; p*=xs[i]; } se+=(ys[i]-f)**2; }
+  return {mse:se/n, coef}; }
 // 통합 흐름 (2026-07-31 대표 확정: 촬영 → 설문 순서): ?flow=full 이면 측정 결과를 저장하고 설문(2단계)으로 안내
 const FLOW_FULL = new URLSearchParams(location.search).get("flow")==="full";
 
@@ -311,6 +345,8 @@ async function sendMeasurement(out){
       mouth_w:r.mouth_w, brow_eye_gap:r.brow_eye_gap, brow_eye_gap_x:r.brow_eye_gap_x,
       temple_w:r.temple_w, nose_w:r.nose_w, jaw_w:r.jaw_w,
       eye_len:r.eye_len, interocular:r.interocular,
+      // M축 후보 3종 — 백엔드팀 컬럼 생성 완료(회신 2026-08-07)로 적재 개시. 판정 미투입, 분포 수집용 [가설]
+      chin_len:r.chin_len, parts_vpos:r.parts_vpos, face_taper:r.face_taper,
       line_score:a.line_score, soft_deep:a.soft_deep, warm_cool:a.warm_cool,
       quality:out.quality||{}
     };
@@ -465,7 +501,8 @@ function analyze(img){
     {label:"정면", ok: tilt<=12,
       tip:"사진이 살짝 기울어져 있어요 — 화면을 정면으로 마주보고 한 번만 더요"},
     {label:"거리", ok: faceW >= W*0.18,
-      tip:"구미가 더 또렷하게 보고 싶어요 — 한 뼘만 더 가까이서 부탁해요"}
+      // 마케팅 검수 2026-08-08: 구미 제거(헌법 §9 — 시그니처 긍정 순간에만) + 재촬영 9~12번과 톤 통일
+      tip:"조금 멀리서 찍혔어요 — 한 뼘만 더 가까이서 한 번만 더요"}
   ];
   if(gates.some(g=>!g.ok)) return gateFail(gateMsg(gates));
   // 헤이즈(뿌연 사진) 검사: 얼굴 영역 평균 채도 — cal#2: 겨울클리어 오판 사례 앵커(2026-07-11, 선명44 vs 흐림21)
@@ -604,6 +641,22 @@ function analyze(img){
   const templeW = +(dist(P(lm,127,W,H),P(lm,356,W,H))/faceW).toFixed(3);
   // 입 벌림 플래그(체크리스트 M2) — 전부 저장 원칙상 lip값은 남기고 플래그만. 임계 0.055는 잠정(이론팀 캘리브레이션 대기).
   const mouthOpen = lipThick > 0.055;
+  // ── M축(동안↔성숙) 후보 2종 — 이론 초안 v0.2 §4-3. 로깅 전용, 판정 미투입. 이론팀 판정 대기 [가설]
+  // 기존 3분할(f_upper/mid/lower)로는 못 잡는 값이다: 3분할은 헤어라인·눈썹·코기저·턱끝의 구간 비율이고,
+  // 아래 둘은 (a) 턱만의 길이 (b) 파츠 덩어리가 얼굴 위/아래 어디로 쏠렸는가 — 서로 다른 정보.
+  // chin_len: 아랫입술 하단(17)→턱끝(152) ÷ faceH. 顔タイプ "あごの長さ" 상당. 짧을수록 동안 쪽.
+  //   lower(코기저→턱끝)는 입을 포함해 턱만의 길이를 분리하지 못하므로 별도 측정한다.
+  const chinLen = +((P(lm,152,W,H).y - P(lm,17,W,H).y)/faceH).toFixed(3);
+  // parts_vpos: 눈 라인(안쪽 눈머리 133/362 중점)이 헤어라인→턱끝 사이 어디인가. 클수록 파츠가 아래쪽 = 동안 쪽.
+  //   顔タイプ 협회가 주축으로 명시한 "パーツの上下位置"에 대응. 기준선은 정수리가 아니라 검출 헤어라인이며,
+  //   협회도 子供顔 요건에 "おでこが広く"를 포함하므로 헤어라인 기준이 방향과 어긋나지 않는다.
+  const partsVpos = +(((eyeLi.y+eyeRi.y)/2 - hairTop.y)/faceH).toFixed(3);
+  // face_taper: 하관폭 ÷ 관자놀이폭. 작을수록 역삼각형(위 넓고 아래 좁음).
+  //   대표 지시 2026-08-07 — 에너제틱의 "부분부분 날카로움" 예시로 '얼굴형 역삼각형'이 지목됐다.
+  //   ⚠ 정직 고지: temple_w 는 «개인차 미검증» 플래그 상태이고 다각도 스캔에서 조건 간 CV 0.25%로
+  //   거의 구조적 불변이었다(오류대장 §046). temple_w 가 실제로 불변이면 face_taper 는 사실상
+  //   jaw_w 의 재척도일 뿐 '역삼각형도'가 아니다. 분포 확보 전까지 이 한계를 안고 쓴다.
+  const faceTaper = templeW>0 ? +(jawW/templeW).toFixed(3) : null;
 
   // ---------- [라인] 직선감·곡선감 ----------
   const chain=[172,136,150,149,176,148,152,377,400,378,379,365,397];
@@ -615,6 +668,11 @@ function analyze(img){
     angSum+=dd;
   }
   const jawAngular=angSum/(chain.length-2)*57.3;
+  // 턱선 곡선 피팅 잔차(로깅 전용, 판정 미사용) — chain 재사용, faceW=1 정규화. 3차 주·2차 병기(외부제안 채택 2026-07-31)
+  const _jx=chain.map(i=>P(lm,i,W,H).x/faceW), _jy=chain.map(i=>P(lm,i,W,H).y/faceW);
+  const _fit3=polyfitMSE(_jx,_jy,3), _fit2=polyfitMSE(_jx,_jy,2);
+  const jawCurveMse3=_fit3.mse!=null?+_fit3.mse.toFixed(5):null, jawCurveMse2=_fit2.mse!=null?+_fit2.mse.toFixed(5):null;
+  const jawCurveA=_fit2.coef?+_fit2.coef[2].toFixed(4):null; // 2차항 계수(곡률 방향·크기, 참고)
   // 턱끝 각도 (작을수록 뾰족·V라인 / 클수록 둥글거나 각짐)
   const chin=P(lm,152,W,H), cL=P(lm,148,W,H), cR=P(lm,377,W,H);
   const v1=Math.atan2(cL.y-chin.y,cL.x-chin.x), v2=Math.atan2(cR.y-chin.y,cR.x-chin.x);
@@ -684,10 +742,13 @@ function analyze(img){
       lip_thick:+lipThick.toFixed(3), mouth_w:+mouthW.toFixed(3),
       brow_eye_gap:browEyeGap, brow_eye_gap_x:browEyeGapX,           // 신규(§5) — eye_open>0.22 게이트, 미통과 시 null
       lip_upper:lipUpper, lip_lower:lipLower, lip_ul_ratio:lipUlRatio, mouth_open:mouthOpen,
-      temple_w:templeW},                                             // [가설] 내부 신호 전용, 카드 비노출
+      temple_w:templeW,                                              // [가설] 내부 신호 전용, 카드 비노출
+      chin_len:chinLen, parts_vpos:partsVpos, face_taper:faceTaper}, // M축·윤곽 후보 — 로깅 전용, 판정 미투입 [가설]
     line:{jaw_angular_deg:+jawAngular.toFixed(1), chin_angle_deg:+chinAngle.toFixed(1), brow_arch_deg:+browArch.toFixed(1),
-      eye_angle:+eyeAngle.toFixed(2), eye_open:+eyeOpen.toFixed(2), mouth_corner:+mouthCorner.toFixed(2)}
+      eye_angle:+eyeAngle.toFixed(2), eye_open:+eyeOpen.toFixed(2), mouth_corner:+mouthCorner.toFixed(2),
+      jaw_curve_mse3:jawCurveMse3, jaw_curve_mse2:jawCurveMse2, jaw_curve_a:jawCurveA}
   };
+  STATE.quality.shadow = shadowBands(STATE.ratio, STATE.line);   // 가설 섀도 상시 기록(CARD_GATE 무관, 판정·노출 불변)
   $("status").textContent="분석은 끝났어요 — 두 장만 골라주세요";
   askDraping("r1");
 }
@@ -985,6 +1046,11 @@ function liveFlash(){
   requestAnimationFrame(()=>{ f.style.opacity="0"; setTimeout(()=>f.remove(), 300); });
 }
 const liveWork=document.createElement("canvas");   // 검사용 저해상 프레임(인식 전용)
+// 실시간 얼굴 메쉬 오버레이 (대표 지시 2026-08-07) — 트루뎁스 없는 기기(안드로이드·웹)에서도
+// "센서가 얼굴을 읽고 있다"는 신뢰 신호를 주기 위함. 판정에는 쓰이지 않는 화면 표시 전용 그리기.
+// FaceLandmarker.FACE_LANDMARKS_TESSELATION은 468점을 잇는 정적 삼각망 연결(start/end 인덱스) 목록 —
+// MediaPipe가 이미 제공하는 상수를 그대로 쓰는 것이라 새로 계산할 게 없다. 모듈 로드 시 1회만 평가해 캐시.
+const MESH_CONNECTIONS = FaceLandmarker.FACE_LANDMARKS_TESSELATION || [];
 // 화면 프리뷰는 비디오 직접 표시로 전환 — livePreviewLoop(캔버스 미러)은 iOS 합성 실패로 폐기.
 async function liveStart(){
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
@@ -1046,17 +1112,23 @@ function liveCheck(){
   for(let i=0;i<d.length;i+=40){ lum+=(d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114); n++; }
   lum/=n;
   // 얼굴
-  let msg="", pass=false;
+  let msg="", pass=false, lm=null;
   const res=engine.detect(liveWork);
   if(!res.faceLandmarks || !res.faceLandmarks.length){
     msg="얼굴을 화면 안에 보여주세요";
   }else{
-    const lm=res.faceLandmarks[0];
+    lm=res.faceLandmarks[0];
     const faceW=Math.hypot((lm[454].x-lm[234].x)*W,(lm[454].y-lm[234].y)*H);
     const cx=(lm[234].x+lm[454].x)/2, cy=(lm[10].y+lm[152].y)/2;
     const tilt=Math.abs(Math.atan2(lm[263].y-lm[33].y, lm[263].x-lm[33].x)*180/Math.PI);
     const offCenter=Math.hypot(cx-0.5, cy-0.5);
+    // 상한(너무 가까움) 0.55는 잠정값 — 실측 근거 미확보. 2026-08-07 다각도 스캔 검증에서 조건 라벨이
+    // 실제 거리와 어긋나 최적 거리를 산출하지 못했다(docs/superpowers/specs/2026-08-07-multiangle-scan-result.md §6-2).
+    // 근거로 남기는 재량 판단: 가이드 타원의 가로 지름이 컨테이너 폭의 0.60(grx*2, 아래 참고)인데,
+    // faceW(광대 간 폭, 귀·머리 제외라 실제 머리 폭보다 좁음)가 프레임의 절반을 넘어서면 이마·턱은
+    // 이미 타원 밖으로 벗어나기 시작한다고 보고 여유를 둬 0.55를 컷오프로 잡았다. 데이터 확보 후 재조정할 것.
     if(faceW < W*0.18)           msg="한 뼘만 더 가까이 와주세요";
+    else if(faceW > W*0.55)      msg="조금만 뒤로 가주세요";
     else if(lum < 55)            msg="조금 더 밝은 곳에서 — 창을 마주 보면 좋아요";
     else if(lum > 225)           msg="빛이 너무 세요 — 직사광은 살짝 피해주세요";
     else if(tilt > 12)           msg="화면을 정면으로 마주 봐주세요";
@@ -1072,6 +1144,27 @@ function liveCheck(){
   ov.width=pv.clientWidth; ov.height=pv.clientHeight;
   const g=ov.getContext("2d");
   g.clearRect(0,0,ov.width,ov.height);
+  // 얼굴 메쉬 오버레이 — 트루뎁스 스캔의 "그물망" 신뢰 신호를 웹에서도 재현 (판정 미사용, 표시 전용).
+  // 좌표 매핑 주의: 검출은 liveWork(비디오 원본과 같은 종횡비, 크롭 없음)에서 하지만 화면은
+  // #liveVideo가 object-fit:cover라 컨테이너 종횡비에 맞춰 잘려 보인다. 정규화 좌표를 그대로
+  // ov.width/height에 곱하면 종횡비가 다를 때 어긋나므로, cover와 동일한 스케일·중앙크롭 오프셋을
+  // 직접 계산해서 맞춘다(letterbox 반대 방향 = crop 보정). 거울모드는 #livePane 전체에 걸린
+  // CSS transform:scaleX(-1)이 liveOverlay도 같은 컨테이너 자식이라 자동으로 함께 반전되므로 여기선 손대지 않는다.
+  if(lm && MESH_CONNECTIONS.length){
+    const vw=v.videoWidth||W, vh=v.videoHeight||H;
+    const coverScale=Math.max(ov.width/vw, ov.height/vh);
+    const drawW=vw*coverScale, drawH=vh*coverScale;
+    const offX=(ov.width-drawW)/2, offY=(ov.height-drawH)/2;
+    g.strokeStyle="rgba(255,255,255,.45)";
+    g.lineWidth=1;
+    g.beginPath();
+    for(const c of MESH_CONNECTIONS){
+      const a=lm[c.start], b=lm[c.end];
+      g.moveTo(a.x*drawW+offX, a.y*drawH+offY);
+      g.lineTo(b.x*drawW+offX, b.y*drawH+offY);
+    }
+    g.stroke();
+  }
   g.strokeStyle = pass ? "rgba(80,200,120,.95)" : "rgba(255,255,255,.75)";
   g.lineWidth=3; g.setLineDash(pass?[]:[10,7]);
   g.beginPath();
@@ -1348,7 +1441,8 @@ function render(o){
   //   해석 밴드는 위쪽 5개 지표 카드(five_axis)에도 노출되므로, 여기 표는 핵심 해석행 + 형태만 남기고 원시는 접는다.
   const COLOR_MAIN=["hue_angle","skin_L","chroma"];         // 해석 지표(웜쿨·명도·채도) — 노출
   const COLOR_HIDE=["skin_a_raw","skin_b_raw"];             // 순수 로깅 — 표 미표시(JSON엔 유지)
-  const RATIO_INTERNAL=["brow_eye_gap","brow_eye_gap_x","lip_upper","lip_lower","lip_ul_ratio","mouth_open","temple_w"]; // 내부 신호(§5) — 카드 검수 전 비노출
+  const RATIO_INTERNAL=["brow_eye_gap","brow_eye_gap_x","lip_upper","lip_lower","lip_ul_ratio","mouth_open","temple_w",
+    "chin_len","parts_vpos","face_taper"];                  // 내부 신호(§5) — 카드 검수 전 비노출. 뒤 3종은 M축 후보(이론 판정 대기)
   const colorMain={}, colorRaw={};
   Object.entries(o.color).forEach(([k,v])=>{ if(COLOR_HIDE.includes(k))return; (COLOR_MAIN.includes(k)?colorMain:colorRaw)[k]=v; });
   const ratioShown={}; Object.entries(o.ratio).forEach(([k,v])=>{ if(!RATIO_INTERNAL.includes(k)) ratioShown[k]=v; });
@@ -1397,7 +1491,7 @@ function signalCards(o){
 
   // M1. 눈-눈썹 거리 (신규 측정 brow_eye_gap) — eye_open>0.22 게이트 미통과 시 null → 카드 숨김(§5 체크리스트)
   if(CARD_GATE.M1 && R.brow_eye_gap!=null){
-    const GAP_CUT = 0.035; // [밴드 잠정 — 데이터 대기] 실측 분포 없음, 베타 백분위로 재산정 예정(이론초안 §5)
+    const GAP_CUT = SB.gap; // [밴드 잠정 — 데이터 대기] 실측 분포 없음, 베타 백분위로 재산정 예정(이론초안 §5) · 경계 단일소스 SB
     const wide = R.brow_eye_gap >= GAP_CUT;
     cards.push({
       icon:"👁️", title:"눈-눈썹 거리",
@@ -1411,7 +1505,7 @@ function signalCards(o){
 
   // M2. 입술 상하 볼륨 (lip_upper+lip_lower 도톰↔얇음 × mouth_w 소↔대 조합) — mouth_open 게이트 시 카드 숨김(§5 체크리스트)
   if(CARD_GATE.M2 && !R.mouth_open){
-    const THICK_CUT = 0.065, WIDE_CUT = 0.40; // [밴드 잠정 — 데이터 대기] N5(2026-07-30): 주지표 lip_upper+lip_lower 합 기준(실제 입술 살), 실측 분포 없음
+    const THICK_CUT = SB.lipThick, WIDE_CUT = SB.mouthWide; // [밴드 잠정 — 데이터 대기] N5(2026-07-30): 주지표 lip_upper+lip_lower 합 기준(실제 입술 살), 실측 분포 없음 · 경계 단일소스 SB
     const thick = (R.lip_upper + R.lip_lower) >= THICK_CUT;   // lip_thick(13·14=입벌림 틈)은 mouth_open 게이트 전용, 판정 미사용
     const wideMouth = R.mouth_w >= WIDE_CUT;
     const bandName = !thick ? "얇음~보통" : (wideMouth ? "도톰·대" : "도톰·소");
@@ -1428,7 +1522,7 @@ function signalCards(o){
   // E1. 눈꼬리 각도 — HINT 임계 그대로(±0.5)
   if(CARD_GATE.E1){
     const v=LN.eye_angle;
-    const b = v>0.5?"상향":v<-0.5?"하향":"수평";
+    const b = v>SB.eyeAng?"상향":v<-SB.eyeAng?"하향":"수평";
     cards.push({icon:"👁️‍🗨️", title:"눈꼬리 각도",
       bands:[{name:"하향",on:b==="하향"},{name:"수평",on:b==="수평"},{name:"상향",on:b==="상향"}],
       text: b==="상향" ? "눈꼬리가 살짝 올라가 있어요. 시선을 또렷하게 끌어올리는 눈이라, 생기 있는 에너지부터 시크한 카리스마까지 힘 있는 매력이 자연스럽게 실려요."
@@ -1455,7 +1549,7 @@ function signalCards(o){
   // E4. 턱선·턱끝 — jaw_angular_deg(7/19)·chin_angle_deg(115/165) HINT 임계 그대로, 조합은 이론초안 §2 판독 규칙
   if(CARD_GATE.E4){
     const jaw=LN.jaw_angular_deg, chin=LN.chin_angle_deg;
-    const b = jaw>=19 ? "각" : (jaw>=7 && chin<115 ? "매끈한 직선" : "곡선");  // N7(이론확정 2026-07-30): '매끈한 직선'에 꺾임각 하한(7≤jaw) 복원 — 턱 아주 둥근 사람(jaw<7)이 세련으로 새던 것 시정(이론초안 §2 "꺾임각 중간+턱끝V")
+    const b = jaw>=SB.jawHi ? "각" : (jaw>=SB.jawLo && chin<SB.chin ? "매끈한 직선" : "곡선");  // N7(이론확정 2026-07-30): 꺾임각 하한(7≤jaw) 복원 · 경계 단일소스 SB
     cards.push({icon:"🫤", title:"턱선·턱끝",
       bands:[{name:"곡선",on:b==="곡선"},{name:"매끈한 직선",on:b==="매끈한 직선"},{name:"각",on:b==="각"}],
       text: b==="각" ? "턱선에 각이 또렷해요. 사진에서 얼굴이 흐트러지지 않고 딱 잡히죠. 강하고 시크한 매력을 낼 때, 이 턱선이 주인공이 돼요."
@@ -1467,7 +1561,7 @@ function signalCards(o){
   // E5. 입꼬리 각도 — HINT 임계 그대로(±0.5)
   if(CARD_GATE.E5){
     const v=LN.mouth_corner;
-    const b = v>0.5?"상향":v<-0.5?"하향":"수평";
+    const b = v>SB.eyeAng?"상향":v<-SB.eyeAng?"하향":"수평";
     cards.push({icon:"🙂", title:"입꼬리 각도",
       bands:[{name:"하향",on:b==="하향"},{name:"수평",on:b==="수평"},{name:"상향",on:b==="상향"}],
       text: b==="상향" ? "입꼬리가 살짝 올라간, 잘 웃는 상이에요. 가만히 있어도 밝은 기운이 도는 입매라, 생기 있는 매력의 절반은 이미 갖고 시작해요."
@@ -1479,8 +1573,8 @@ function signalCards(o){
   // E7. 눈썹 아치각 — HINT 임계(5/25) 재사용. 중간 구간은 확정 문안이 없어 카드 자체를 숨김(창작 금지)
   if(CARD_GATE.E7){
     const v=LN.brow_arch_deg;
-    if(v>=25 || v<5){
-      const arch = v>=25;
+    if(v>=SB.archHi || v<SB.archLo){
+      const arch = v>=SB.archHi;
       cards.push({icon:"⌒", title:"눈썹 아치각",
         bands:[{name:"일자형(직선)",on:!arch},{name:"아치형(곡선)",on:arch}],
         text: arch
