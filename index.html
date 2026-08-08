@@ -428,6 +428,53 @@ $("file").addEventListener("change", async ev=>{
 });
 
 // ---------- 색 변환: sRGB → CIELAB ----------
+// 시선(수평) — 홍채 중심이 눈 가로 중앙에서 얼마나 벗어났나. 눈 가로폭으로 나눠 정규화한다.
+// 0 = 렌즈 응시. 부호는 이미지 x 기준(셀카 반전과 무관하게 절대값만 쓴다).
+// 랜드마크: 좌안 33(바깥)·133(안)·468(홍채중심) / 우안 263·362·473 — 이미 공막 샘플링에 쓰던 것들이라
+// 추가 검출 비용이 없다(face_landmarker.task는 홍채 478점을 기본 포함).
+//
+// ⚠ 수직 시선은 쓰지 않는다. 눈 세로 중심(159/145 중점)이 눈꺼풀 경계 기준인데 홍채는 윗눈꺼풀에
+// 가려져서 중심 추정이 편향된다 — Sample 12장 실측에서 평균 −0.046으로 기준선이 0이 아니었다.
+// 판정 블록(rgb2lab~engine_ver) 밖에 둔다 → drift-hash 불변.
+function gazeH(lm,W,H){
+  const p=i=>({x:lm[i].x*W, y:lm[i].y*H});
+  const eyes=[[33,133,468],[263,362,473]], v=[];
+  for(const [o,i,c] of eyes){
+    const O=p(o), I=p(i), C=p(c), w=Math.abs(O.x-I.x);
+    if(w>0) v.push((C.x-(O.x+I.x)/2)/w);
+  }
+  return v.length ? v.reduce((a,b)=>a+b,0)/v.length : 0;
+}
+
+// ── 기기 기울기(자이로) — 로깅 전용 · 판정 블록 밖이라 drift-hash 불변 ──
+// 왜 필요한가: 현행 `tilt`는 눈 랜드마크 기준 화면상 롤이라 **얼굴이 기울었는지 기기가 기울었는지
+// 구분하지 못한다.** gamma가 있으면 그 둘이 분리된다.
+// 더 중요한 건 pitch다 — 기기를 아래에서 위로 들면 원근 왜곡으로 턱이 커지고 이마가 작아진다.
+// 오늘 추가한 M축 필드(face_HW·chin_len·parts_vpos)가 정확히 이 왜곡에 취약하다(오류대장 §050).
+//
+// beta: 앞뒤 기울기(기기를 얼굴 쪽으로 세우면 ≈90) / gamma: 좌우 기울기(0=수평)
+// iOS 13+ 는 requestPermission()이 **사용자 제스처 안에서** 호출돼야 한다 → liveStart() 초입에서 호출.
+let DEV_TILT=null, _devTiltFn=null;
+async function startTiltSensor(){
+  if(typeof DeviceOrientationEvent==="undefined"){ DEV_TILT={supported:false, reason:"unsupported"}; return; }
+  try{
+    if(typeof DeviceOrientationEvent.requestPermission==="function"){
+      const p=await DeviceOrientationEvent.requestPermission();
+      if(p!=="granted"){ DEV_TILT={supported:false, reason:"denied"}; return; }
+    }
+    _devTiltFn=e=>{
+      if(e.beta==null && e.gamma==null) return;   // 센서 없는 기기는 null만 보낸다
+      DEV_TILT={supported:true, beta:+(e.beta||0).toFixed(1), gamma:+(e.gamma||0).toFixed(1),
+                pitch_off:+Math.abs((e.beta||0)-90).toFixed(1)};   // 90=기기 수직(셀카 표준 자세) 기준 이탈각
+    };
+    window.addEventListener("deviceorientation", _devTiltFn);
+    if(!DEV_TILT) DEV_TILT={supported:true, pending:true};   // 첫 이벤트 전
+  }catch(e){ DEV_TILT={supported:false, reason:"error"}; }
+}
+function stopTiltSensor(){
+  if(_devTiltFn){ window.removeEventListener("deviceorientation", _devTiltFn); _devTiltFn=null; }
+}
+
 function rgb2lab(r,g,b){
   let [R,G,B]=[r,g,b].map(v=>{v/=255; return v>0.04045?Math.pow((v+0.055)/1.055,2.4):v/12.92;});
   let X=(R*0.4124+G*0.3576+B*0.1805)/0.95047, Y=R*0.2126+G*0.7152+B*0.0722, Z=(R*0.0193+G*0.1192+B*0.9505)/1.08883;
@@ -729,6 +776,8 @@ function analyze(img){
     draping: {r1:null, r2:null, r3:null, r4:null},
     conf_base: confidence,
     quality:{pass:true, cam_lock:LIVE_LOCK, light:+(lum/255).toFixed(2), tilt_deg:+tilt.toFixed(1), light_ref:refType, L_corrected, L_gain:+L_gain.toFixed(3), L_shift:+L_shift.toFixed(1), bg_blown:bgBlown, bg_dim:bgDim, forehead_used:browDelta<=18, hairline_detected:hairTop.detected,
+      gaze_h:+gazeH(lm,W,H).toFixed(3),   // 시선 수평 이탈 — 로깅 전용(촬영 후 게이트 미투입). 실사용 분포로 문턱 확정 예정
+      dev_tilt:DEV_TILT,                  // 기기 기울기(자이로) — 로깅 전용. 데스크톱은 supported:false
       sclera_L:+sclera.L.toFixed(1), sclera_a:+sclera.a.toFixed(1), sclera_b:+sclera.b.toFixed(1), bg_a:bgPick?+bgPick.a.toFixed(1):null, bg_b:bgPick?+bgPick.b.toFixed(1):null, ref_a:+ref.a.toFixed(1), ref_b:+ref.b.toFixed(1), skin_clip:+skinClipMax.toFixed(2), skinL_A:+skinL_A.toFixed(1), skinL_pre:+skinL.toFixed(1), global_sat:+globalSat.toFixed(1), hazy, device:DEVICE, ua:(/Mobi/i.test(navigator.userAgent)?"mobile":"desktop")},
     axes_partial:{soft_deep:+soft_deep.toFixed(2), line_score:+lineScore.toFixed(2)},
     color:{ // ── 5기준 체계: 웜쿨 / 명도 / 채도 / 탁기 / 대비 ──
@@ -1053,6 +1102,7 @@ const liveWork=document.createElement("canvas");   // 검사용 저해상 프레
 const MESH_CONNECTIONS = FaceLandmarker.FACE_LANDMARKS_TESSELATION || [];
 // 화면 프리뷰는 비디오 직접 표시로 전환 — livePreviewLoop(캔버스 미러)은 iOS 합성 실패로 폐기.
 async function liveStart(){
+  startTiltSensor();   // iOS 권한은 사용자 제스처 안에서만 — 버튼 클릭으로 들어온 이 지점이 유일한 기회다. await 걸지 않는다(카메라 시작을 막지 않도록)
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
     $("status").innerHTML=`<div class="warn">이 브라우저에선 카메라를 쓸 수 없어요 — 사파리·크롬 최신 버전으로 열어주세요</div>`; return;
   }
@@ -1097,6 +1147,7 @@ function liveStop(){
   if(liveTimer){ clearInterval(liveTimer); liveTimer=null; }
   if(livePrevRaf){ cancelAnimationFrame(livePrevRaf); livePrevRaf=null; }
   if(liveStream){ liveStream.getTracks().forEach(t=>t.stop()); liveStream=null; }
+  stopTiltSensor();   // 리스너를 남기면 카메라를 닫아도 센서가 계속 돈다
   $("liveWrap").classList.remove("open");
   document.body.classList.remove("cam-open");
 }
@@ -1133,6 +1184,7 @@ function liveCheck(){
     else if(lum > 225)           msg="빛이 너무 세요 — 직사광은 살짝 피해주세요";
     else if(tilt > 12)           msg="화면을 정면으로 마주 봐주세요";
     else if(offCenter > 0.18)    msg="얼굴을 가운데 타원에 맞춰주세요";
+    else if(Math.abs(gazeH(lm,W,H)) > 0.10) msg="정확한 진단을 위해 카메라를 응시해주세요";   // 대표 확정 2026-08-08
     else { msg="좋아요! 이대로 찍어주세요 ✨"; pass=true; }
   }
   // 자동 촬영은 대표 피드백(2026-07-22)으로 철회 — "어떤 상태로 찍혔는지 확인이 안 되어 불쾌"
